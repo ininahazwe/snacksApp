@@ -33,16 +33,25 @@ export default function UsersView() {
 
   const changerRole = async (userId, nouveauRole) => {
     setUpdatingId(userId)
-    // Supabase Admin API via edge function ou service role
-    // Pour l'instant on utilise la fonction RPC qu'on va créer
-    const { error } = await supabase.rpc('update_user_role', {
-      target_user_id: userId,
-      new_role: nouveauRole,
-    })
-    if (!error) {
-      setUsers(us => us.map(u => u.id === userId ? { ...u, role: nouveauRole } : u))
-    } else {
-      alert('Could not update role. Make sure the SQL function is installed.')
+    try {
+      // Utiliser la RPC qu'on vient de créer
+      const { data, error } = await supabase.rpc('update_user_role', {
+        target_user_id: userId,
+        new_role: nouveauRole,
+      })
+
+      if (error) {
+        console.error('RPC error:', error)
+        alert('Erreur: ' + (error.message || 'Impossible de changer le rôle'))
+      } else if (data?.error) {
+        alert('Erreur: ' + data.error)
+      } else {
+        // Succès: mettre à jour l'UI
+        setUsers(us => us.map(u => u.id === userId ? { ...u, role: nouveauRole } : u))
+      }
+    } catch (err) {
+      console.error('Erreur changement rôle:', err)
+      alert('Erreur: ' + err.message)
     }
     setUpdatingId(null)
   }
@@ -115,7 +124,7 @@ export default function UsersView() {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
           </svg>
-          Run <code style={s.code}>supabase-migration-phase5.sql</code> and <code style={s.code}>supabase-rpc-roles.sql</code> in Supabase SQL Editor to enable this view.
+          ⚙️ Run both SQL files in Supabase SQL Editor: <code style={s.code}>supabase-users-view.sql</code> and <code style={s.code}>supabase-rpc-update-user-role.sql</code>
         </div>
 
         {/* Modal instructions ajout utilisateur */}
@@ -131,15 +140,15 @@ export default function UsersView() {
                 <div style={s.instructionBox}>
                   <div style={s.instructionStep}>
                     <div style={s.stepNum}>1</div>
-                    <div>Go to your <strong>Supabase dashboard</strong> → Authentication → Users → <strong>Add user</strong></div>
+                    <div>Go to <strong>Supabase dashboard</strong> → Authentication → Users → <strong>Add user</strong></div>
                   </div>
                   <div style={s.instructionStep}>
                     <div style={s.stepNum}>2</div>
-                    <div>Enter the email and password of the new user</div>
+                    <div>Enter email + password, check "Auto confirm user", then <strong>Create user</strong></div>
                   </div>
                   <div style={s.instructionStep}>
                     <div style={s.stepNum}>3</div>
-                    <div>Then set their role below using the <strong>SQL Editor</strong></div>
+                    <div>Come back here, refresh the page, and use the <strong>role selector</strong> to assign the role</div>
                   </div>
                 </div>
 
@@ -162,15 +171,6 @@ export default function UsersView() {
                         </div>
                     ))}
                   </div>
-                </div>
-
-                <div style={s.sqlBlock}>
-                  <div style={s.sqlBlockLabel}>SQL to run after creating the user</div>
-                  <code style={s.sqlCode}>
-                    {`UPDATE auth.users
-SET raw_user_meta_data = raw_user_meta_data || '{"role": "${newRole}"}'::jsonb
-WHERE email = 'email@example.com';`}
-                  </code>
                 </div>
               </div>
             </div>
