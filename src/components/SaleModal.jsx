@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
 
 export default function SaleModal({ product, onClose, onSuccess }) {
+  const { user } = useAuth()
   const [qty, setQty] = useState(1)
   const [selectedClient, setSelectedClient] = useState(null)
   const [paymentType, setPaymentType] = useState('cash')
@@ -28,6 +30,7 @@ export default function SaleModal({ product, onClose, onSuccess }) {
       const { error: saleError } = await supabase.from('sales').insert({
         product_id: product.id,
         client_id: selectedClient?.id ?? null,
+        user_id: user?.id ?? null,
         qty,
         amount: total,
         type: paymentType,
@@ -36,9 +39,9 @@ export default function SaleModal({ product, onClose, onSuccess }) {
 
       // 2. Décrémenter le stock du produit
       const { error: stockError } = await supabase
-        .from('products')
-        .update({ stock: product.stock - qty })
-        .eq('id', product.id)
+          .from('products')
+          .update({ stock: product.stock - qty })
+          .eq('id', product.id)
       if (stockError) throw stockError
 
       // 3. Enregistrer le mouvement de stock
@@ -51,9 +54,9 @@ export default function SaleModal({ product, onClose, onSuccess }) {
       // 4. Si dette, incrémenter la dette du client
       if (paymentType === 'dette' && selectedClient) {
         await supabase
-          .from('clients')
-          .update({ debt: (selectedClient.debt ?? 0) + total })
-          .eq('id', selectedClient.id)
+            .from('clients')
+            .update({ debt: (selectedClient.debt ?? 0) + total })
+            .eq('id', selectedClient.id)
       }
 
       onSuccess(`✓ Vente enregistrée — ${total.toLocaleString()} F CFA`)
@@ -66,121 +69,121 @@ export default function SaleModal({ product, onClose, onSuccess }) {
   }
 
   return (
-    <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div style={styles.modal}>
-        <div style={styles.handle} />
+      <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+        <div style={styles.modal}>
+          <div style={styles.handle} />
 
-        {/* Produit */}
-        <div style={styles.productHeader}>
-          <div style={{ ...styles.productEmoji, background: (product.color ?? '#EEE') + '22' }}>
-            {product.emoji ?? '🍬'}
+          {/* Produit */}
+          <div style={styles.productHeader}>
+            <div style={{ ...styles.productEmoji, background: (product.color ?? '#EEE') + '22' }}>
+              {product.emoji ?? '🍬'}
+            </div>
+            <div>
+              <div style={styles.productName}>{product.name}</div>
+              <div style={styles.productPrice}>{product.price.toLocaleString()} F CFA · unité</div>
+            </div>
           </div>
-          <div>
-            <div style={styles.productName}>{product.name}</div>
-            <div style={styles.productPrice}>{product.price.toLocaleString()} F CFA · unité</div>
-          </div>
-        </div>
 
-        {/* Quantité */}
-        <div style={styles.fieldGroup}>
-          <div style={styles.fieldLabel}>Quantité</div>
-          <div style={styles.qtyControl}>
-            <button style={styles.qtyBtn} onClick={() => setQty(q => Math.max(1, q - 1))}>−</button>
-            <span style={styles.qtyValue}>{qty}</span>
-            <button style={styles.qtyBtn} onClick={() => setQty(q => q + 1)}>+</button>
+          {/* Quantité */}
+          <div style={styles.fieldGroup}>
+            <div style={styles.fieldLabel}>Quantité</div>
+            <div style={styles.qtyControl}>
+              <button style={styles.qtyBtn} onClick={() => setQty(q => Math.max(1, q - 1))}>−</button>
+              <span style={styles.qtyValue}>{qty}</span>
+              <button style={styles.qtyBtn} onClick={() => setQty(q => q + 1)}>+</button>
+            </div>
           </div>
-        </div>
 
-        {/* Client */}
-        <div style={styles.fieldGroup}>
-          <div style={styles.fieldLabel}>Client</div>
-          {loadingClients ? (
-            <div style={styles.loadingText}>Chargement…</div>
-          ) : (
-            <div style={styles.clientList}>
-              {clients.map(c => (
-                <div
-                  key={c.id}
-                  style={{
-                    ...styles.clientOption,
-                    borderColor: selectedClient?.id === c.id ? '#1A1A1A' : '#EBEBEB',
-                    background: selectedClient?.id === c.id ? '#FAFAFA' : 'white',
-                  }}
-                  onClick={() => setSelectedClient(selectedClient?.id === c.id ? null : c)}
-                >
-                  <div style={{
-                    ...styles.checkCircle,
-                    background: selectedClient?.id === c.id ? '#1A1A1A' : 'transparent',
-                    borderColor: selectedClient?.id === c.id ? '#1A1A1A' : '#DDD',
-                  }}>
-                    {selectedClient?.id === c.id && (
-                      <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5">
-                        <path d="M2 6l3 3 5-5" />
-                      </svg>
-                    )}
-                  </div>
-                  <span style={styles.clientOptionName}>{c.name}</span>
-                  {c.debt > 0 && (
-                    <span style={styles.debtBadge}>−{c.debt.toLocaleString()} F</span>
-                  )}
+          {/* Client */}
+          <div style={styles.fieldGroup}>
+            <div style={styles.fieldLabel}>Client</div>
+            {loadingClients ? (
+                <div style={styles.loadingText}>Chargement…</div>
+            ) : (
+                <div style={styles.clientList}>
+                  {clients.map(c => (
+                      <div
+                          key={c.id}
+                          style={{
+                            ...styles.clientOption,
+                            borderColor: selectedClient?.id === c.id ? '#1A1A1A' : '#EBEBEB',
+                            background: selectedClient?.id === c.id ? '#FAFAFA' : 'white',
+                          }}
+                          onClick={() => setSelectedClient(selectedClient?.id === c.id ? null : c)}
+                      >
+                        <div style={{
+                          ...styles.checkCircle,
+                          background: selectedClient?.id === c.id ? '#1A1A1A' : 'transparent',
+                          borderColor: selectedClient?.id === c.id ? '#1A1A1A' : '#DDD',
+                        }}>
+                          {selectedClient?.id === c.id && (
+                              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5">
+                                <path d="M2 6l3 3 5-5" />
+                              </svg>
+                          )}
+                        </div>
+                        <span style={styles.clientOptionName}>{c.name}</span>
+                        {c.debt > 0 && (
+                            <span style={styles.debtBadge}>−{c.debt.toLocaleString()} F</span>
+                        )}
+                      </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Mode de paiement */}
-        <div style={styles.fieldGroup}>
-          <div style={styles.fieldLabel}>Mode de paiement</div>
-          <div style={styles.paymentToggle}>
-            <div
-              style={{
-                ...styles.paymentOption,
-                borderColor: paymentType === 'cash' ? '#2E7D42' : '#EBEBEB',
-                background: paymentType === 'cash' ? '#F0FBF3' : 'white',
-              }}
-              onClick={() => setPaymentType('cash')}
-            >
-              <div style={styles.paymentEmoji}>💵</div>
-              <div style={styles.paymentLabel}>Paiement direct</div>
-            </div>
-            <div
-              style={{
-                ...styles.paymentOption,
-                borderColor: paymentType === 'dette' ? '#C45000' : '#EBEBEB',
-                background: paymentType === 'dette' ? '#FFF5EE' : 'white',
-              }}
-              onClick={() => setPaymentType('dette')}
-            >
-              <div style={styles.paymentEmoji}>📋</div>
-              <div style={styles.paymentLabel}>Mettre en dette</div>
-            </div>
+            )}
           </div>
-          {paymentType === 'dette' && !selectedClient && (
-            <div style={styles.warning}>⚠ Sélectionne un client pour enregistrer une dette</div>
-          )}
-        </div>
 
-        {/* Total */}
-        <div style={styles.totalLine}>
-          <span style={styles.totalLabel}>Total</span>
-          <span style={styles.totalValue}>{total.toLocaleString()} F CFA</span>
-        </div>
+          {/* Mode de paiement */}
+          <div style={styles.fieldGroup}>
+            <div style={styles.fieldLabel}>Mode de paiement</div>
+            <div style={styles.paymentToggle}>
+              <div
+                  style={{
+                    ...styles.paymentOption,
+                    borderColor: paymentType === 'cash' ? '#2E7D42' : '#EBEBEB',
+                    background: paymentType === 'cash' ? '#F0FBF3' : 'white',
+                  }}
+                  onClick={() => setPaymentType('cash')}
+              >
+                <div style={styles.paymentEmoji}>💵</div>
+                <div style={styles.paymentLabel}>Paiement direct</div>
+              </div>
+              <div
+                  style={{
+                    ...styles.paymentOption,
+                    borderColor: paymentType === 'dette' ? '#C45000' : '#EBEBEB',
+                    background: paymentType === 'dette' ? '#FFF5EE' : 'white',
+                  }}
+                  onClick={() => setPaymentType('dette')}
+              >
+                <div style={styles.paymentEmoji}>📋</div>
+                <div style={styles.paymentLabel}>Mettre en dette</div>
+              </div>
+            </div>
+            {paymentType === 'dette' && !selectedClient && (
+                <div style={styles.warning}>⚠ Sélectionne un client pour enregistrer une dette</div>
+            )}
+          </div>
 
-        {/* Bouton */}
-        <button
-          style={{
-            ...styles.submitBtn,
-            opacity: (loading || (paymentType === 'dette' && !selectedClient)) ? 0.5 : 1,
-            cursor: (loading || (paymentType === 'dette' && !selectedClient)) ? 'not-allowed' : 'pointer',
-          }}
-          onClick={handleSubmit}
-          disabled={loading || (paymentType === 'dette' && !selectedClient)}
-        >
-          {loading ? 'Enregistrement…' : 'Enregistrer la vente'}
-        </button>
+          {/* Total */}
+          <div style={styles.totalLine}>
+            <span style={styles.totalLabel}>Total</span>
+            <span style={styles.totalValue}>{total.toLocaleString()} F CFA</span>
+          </div>
+
+          {/* Bouton */}
+          <button
+              style={{
+                ...styles.submitBtn,
+                opacity: (loading || (paymentType === 'dette' && !selectedClient)) ? 0.5 : 1,
+                cursor: (loading || (paymentType === 'dette' && !selectedClient)) ? 'not-allowed' : 'pointer',
+              }}
+              onClick={handleSubmit}
+              disabled={loading || (paymentType === 'dette' && !selectedClient)}
+          >
+            {loading ? 'Enregistrement…' : 'Enregistrer la vente'}
+          </button>
+        </div>
       </div>
-    </div>
   )
 }
 

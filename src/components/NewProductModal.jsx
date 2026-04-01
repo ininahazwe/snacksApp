@@ -63,124 +63,124 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
   }
 
   return (
-    <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div style={styles.modal}>
-        <div style={styles.handle} />
+      <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+        <div style={styles.modal}>
+          <div style={styles.handle} />
 
-        <div style={styles.header}>
-          <div>
-            <div style={styles.title}>New product</div>
-            {barcode && <div style={styles.barcode}>Barcode: {barcode}</div>}
+          <div style={styles.header}>
+            <div>
+              <div style={styles.title}>New product</div>
+              {barcode && <div style={styles.barcode}>Barcode: {barcode}</div>}
+            </div>
+            <button style={styles.cancelBtn} onClick={onClose}>Cancel</button>
           </div>
-          <button style={styles.cancelBtn} onClick={onClose}>Cancel</button>
-        </div>
 
-        {/* Résultat Open Food Facts */}
-        {fetching && (
-          <div style={styles.offLoading}>🔍 Recherche sur Open Food Facts…</div>
-        )}
-        {offResult && !fetching && (
-          <div style={styles.offResult}>
-            ✓ Trouvé sur Open Food Facts
-            {offResult.brand && <span style={styles.offBrand}> · {offResult.brand}</span>}
-          </div>
-        )}
+          {/* Résultat Open Food Facts */}
+          {fetching && (
+              <div style={styles.offLoading}>🔍 Recherche sur Open Food Facts…</div>
+          )}
+          {offResult && !fetching && (
+              <div style={styles.offResult}>
+                ✓ Trouvé sur Open Food Facts
+                {offResult.brand && <span style={styles.offBrand}> · {offResult.brand}</span>}
+              </div>
+          )}
 
-        {/* Nom */}
-        <div style={styles.fieldGroup}>
-          <div style={styles.fieldLabel}>Nom du produit *</div>
-          <input
-            style={styles.input}
-            placeholder="Ex : Caramel Fleur de Sel"
-            value={name}
-            onChange={e => setName(e.target.value)}
-          />
-        </div>
-
-        {/* Prix + Stock */}
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <div style={{ ...styles.fieldGroup, flex: 1 }}>
-            <div style={styles.fieldLabel}>Prix (F CFA) *</div>
+          {/* Nom */}
+          <div style={styles.fieldGroup}>
+            <div style={styles.fieldLabel}>Nom du produit *</div>
             <input
-              style={styles.input}
-              type="number"
-              placeholder="500"
-              value={price}
-              onChange={e => setPrice(e.target.value)}
+                style={styles.input}
+                placeholder="Ex : Caramel Fleur de Sel"
+                value={name}
+                onChange={e => setName(e.target.value)}
             />
           </div>
-          <div style={{ ...styles.fieldGroup, flex: 1 }}>
-            <div style={styles.fieldLabel}>Stock initial</div>
-            <input
-              style={styles.input}
-              type="number"
-              placeholder="0"
-              value={stock}
-              onChange={e => setStock(e.target.value)}
-            />
-          </div>
-        </div>
 
-        {/* Emoji */}
-        <div style={styles.fieldGroup}>
-          <div style={styles.fieldLabel}>Icône</div>
-          <div style={styles.emojiGrid}>
-            {EMOJIS.map(e => (
-              <button
-                key={e}
-                style={{
-                  ...styles.emojiBtn,
-                  background: emoji === e ? '#1A1A1A' : '#F5F5F5',
-                  transform: emoji === e ? 'scale(1.15)' : 'scale(1)',
-                }}
-                onClick={() => setEmoji(e)}
-              >
-                {e}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Couleur */}
-        <div style={styles.fieldGroup}>
-          <div style={styles.fieldLabel}>Couleur</div>
-          <div style={styles.colorGrid}>
-            {COLORS.map(c => (
-              <button
-                key={c}
-                style={{
-                  ...styles.colorBtn,
-                  background: c,
-                  border: color === c ? '2.5px solid #1A1A1A' : '2.5px solid transparent',
-                  transform: color === c ? 'scale(1.2)' : 'scale(1)',
-                }}
-                onClick={() => setColor(c)}
+          {/* Prix + Stock */}
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <div style={{ ...styles.fieldGroup, flex: 1 }}>
+              <div style={styles.fieldLabel}>Prix (GH₵) *</div>
+              <input
+                  style={styles.input}
+                  type="number"
+                  placeholder="500"
+                  value={price}
+                  onChange={e => setPrice(e.target.value)}
               />
-            ))}
+            </div>
+            <div style={{ ...styles.fieldGroup, flex: 1 }}>
+              <div style={styles.fieldLabel}>Stock initial</div>
+              <input
+                  style={styles.input}
+                  type="number"
+                  placeholder="0"
+                  value={stock}
+                  onChange={e => setStock(e.target.value)}
+              />
+            </div>
           </div>
-        </div>
 
-        {/* Aperçu */}
-        <div style={styles.preview}>
-          <div style={{ ...styles.previewEmoji, background: color + '22' }}>{emoji}</div>
-          <div>
-            <div style={styles.previewName}>{name || 'Nom du produit'}</div>
-            <div style={styles.previewPrice}>{price ? parseInt(price).toLocaleString() + ' F CFA' : '— F CFA'}</div>
+          {/* Emoji */}
+          <div style={styles.fieldGroup}>
+            <div style={styles.fieldLabel}>Icône</div>
+            <div style={styles.emojiGrid}>
+              {EMOJIS.map(e => (
+                  <button
+                      key={e}
+                      style={{
+                        ...styles.emojiBtn,
+                        background: emoji === e ? '#1A1A1A' : '#F5F5F5',
+                        transform: emoji === e ? 'scale(1.15)' : 'scale(1)',
+                      }}
+                      onClick={() => setEmoji(e)}
+                  >
+                    {e}
+                  </button>
+              ))}
+            </div>
           </div>
-        </div>
 
-        <button
-          style={{
-            ...styles.submitBtn,
-            opacity: (!name || !price || loading) ? 0.5 : 1,
-          }}
-          onClick={handleSubmit}
-          disabled={!name || !price || loading}
-        >
-          {loading ? 'Enregistrement…' : 'Créer le produit'}
-        </button>
+          {/* Couleur */}
+          <div style={styles.fieldGroup}>
+            <div style={styles.fieldLabel}>Couleur</div>
+            <div style={styles.colorGrid}>
+              {COLORS.map(c => (
+                  <button
+                      key={c}
+                      style={{
+                        ...styles.colorBtn,
+                        background: c,
+                        border: color === c ? '2.5px solid #1A1A1A' : '2.5px solid transparent',
+                        transform: color === c ? 'scale(1.2)' : 'scale(1)',
+                      }}
+                      onClick={() => setColor(c)}
+                  />
+              ))}
+            </div>
+          </div>
+
+          {/* Aperçu */}
+          <div style={styles.preview}>
+            <div style={{ ...styles.previewEmoji, background: color + '22' }}>{emoji}</div>
+            <div>
+              <div style={styles.previewName}>{name || 'Nom du produit'}</div>
+              <div style={styles.previewPrice}>{price ? parseInt(price).toLocaleString() + ' GH₵' : '— GH₵'}</div>
+            </div>
+          </div>
+
+          <button
+              style={{
+                ...styles.submitBtn,
+                opacity: (!name || !price || loading) ? 0.5 : 1,
+              }}
+              onClick={handleSubmit}
+              disabled={!name || !price || loading}
+          >
+            {loading ? 'Enregistrement…' : 'Créer le produit'}
+          </button>
+        </div>
       </div>
-    </div>
   )
 }
 

@@ -40,7 +40,7 @@ export default function VentesView() {
       {filter !== 'dette' && (
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'white',borderRadius:'14px',padding:'14px 18px',marginBottom:'16px',border:'1px solid rgba(0,0,0,0.05)',boxShadow:'0 2px 12px rgba(0,0,0,0.04)'}}>
           <span style={{fontSize:'13px',color:'#999'}}>Total encaissé</span>
-          <span style={{fontFamily:"'DM Serif Display',serif",fontSize:'20px',color:'#1A1A1A'}}>{totalCash.toLocaleString()} F CFA</span>
+          <span style={{fontFamily:"'DM Serif Display',serif",fontSize:'20px',color:'#1A1A1A'}}>{totalCash.toLocaleString()} GH₵</span>
         </div>
       )}
 

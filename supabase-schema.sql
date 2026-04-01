@@ -7,7 +7,7 @@
 create table public.products (
   id          uuid primary key default gen_random_uuid(),
   name        text not null,
-  price       integer not null,           -- en F CFA
+  price       integer not null,           -- en GH₵
   stock       integer not null default 0,
   barcode     text unique,                -- code-barres scanné
   emoji       text default '🍬',
@@ -20,7 +20,7 @@ create table public.clients (
   id          uuid primary key default gen_random_uuid(),
   name        text not null,
   phone       text,
-  debt        integer not null default 0, -- dette en F CFA
+  debt        integer not null default 0, -- dette en GH₵
   created_at  timestamptz default now()
 );
 
@@ -30,7 +30,7 @@ create table public.sales (
   product_id  uuid references public.products(id) on delete set null,
   client_id   uuid references public.clients(id) on delete set null,
   qty         integer not null default 1,
-  amount      integer not null,           -- prix total en F CFA
+  amount      integer not null,           -- prix total en GH₵
   type        text not null check (type in ('cash', 'dette')),
   created_at  timestamptz default now()
 );

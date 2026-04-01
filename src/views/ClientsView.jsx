@@ -146,7 +146,7 @@ export default function ClientsView() {
             <div style={{ ...s.detteBanner, background: selectedClient.debt > 0 ? '#FFF5EE' : '#F0FBF3' }}>
               <div style={s.detteBannerLabel}>Current balance</div>
               <div style={{ ...s.detteBannerValue, color: selectedClient.debt > 0 ? '#C45000' : '#2E7D42' }}>
-                {selectedClient.debt > 0 ? `−${selectedClient.debt.toLocaleString()} F CFA` : 'Cleared ✓'}
+                {selectedClient.debt > 0 ? `−${selectedClient.debt.toLocaleString()} GH₵` : 'Cleared ✓'}
               </div>
             </div>
 
@@ -158,7 +158,7 @@ export default function ClientsView() {
                   <input
                     style={s.paiementInput}
                     type="number"
-                    placeholder="Amount (F CFA)"
+                    placeholder="Amount (GH₵)"
                     value={montantRemboursement}
                     onChange={e => setMontantRemboursement(e.target.value)}
                   />

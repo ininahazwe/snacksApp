@@ -57,7 +57,7 @@ export default function Dashboard({ onProductTap }) {
       {/* KPI principal */}
       <div style={s.kpiAccent}>
         <div style={s.kpiAccentLabel}>Today's revenue</div>
-        <div style={s.kpiAccentValue}>{stats.today.toLocaleString()} <span style={{ fontSize: 18 }}>F CFA</span></div>
+        <div style={s.kpiAccentValue}>{stats.today.toLocaleString()} <span style={{ fontSize: 18 }}>GH₵</span></div>
         <div style={s.kpiAccentSub}>{stats.nbToday} transaction{stats.nbToday !== 1 ? 's' : ''}</div>
       </div>
 
@@ -66,19 +66,19 @@ export default function Dashboard({ onProductTap }) {
         <div style={s.kpiCard}>
           <div style={s.kpiLabel}>This week</div>
           <div style={s.kpiValue}>{stats.week.toLocaleString()}</div>
-          <div style={s.kpiSub}>F CFA</div>
+          <div style={s.kpiSub}>GH₵</div>
         </div>
         <div style={s.kpiCard}>
           <div style={s.kpiLabel}>This month</div>
           <div style={s.kpiValue}>{stats.month.toLocaleString()}</div>
-          <div style={s.kpiSub}>F CFA</div>
+          <div style={s.kpiSub}>GH₵</div>
         </div>
         <div style={s.kpiCard}>
           <div style={s.kpiLabel}>Outstanding</div>
           <div style={{ ...s.kpiValue, color: stats.dettes > 0 ? '#C45000' : '#2E7D42' }}>
             {stats.dettes.toLocaleString()}
           </div>
-          <div style={s.kpiSub}>F CFA debt</div>
+          <div style={s.kpiSub}>GH₵ debt</div>
         </div>
         <div style={{ ...s.kpiCard, borderColor: stats.stockBas > 0 ? '#FFCDB2' : 'rgba(0,0,0,0.05)' }}>
           <div style={s.kpiLabel}>Low stock</div>
