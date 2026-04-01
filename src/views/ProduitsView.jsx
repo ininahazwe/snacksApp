@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import NewProductModal from '../components/NewProductModal'
 
 export default function ProduitsView({ onProductTap }) {
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [showNewProduct, setShowNewProduct] = useState(false)
 
   useEffect(() => { fetchProducts() }, [])
 
@@ -12,6 +14,11 @@ export default function ProduitsView({ onProductTap }) {
     const { data } = await supabase.from('products').select('*').order('name')
     setProducts(data ?? [])
     setLoading(false)
+  }
+
+  const handleProductCreated = (product) => {
+    setProducts(ps => [...ps, product].sort((a, b) => a.name.localeCompare(b.name)))
+    setShowNewProduct(false)
   }
 
   const filtered = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
@@ -52,6 +59,13 @@ export default function ProduitsView({ onProductTap }) {
             </div>
           ))}
         </div>
+      )}
+      {showNewProduct && (
+        <NewProductModal
+          barcode={null}
+          onClose={() => setShowNewProduct(false)}
+          onCreated={handleProductCreated}
+        />
       )}
     </div>
   )

@@ -69,9 +69,10 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
 
         <div style={styles.header}>
           <div>
-            <div style={styles.title}>Nouveau produit</div>
-            {barcode && <div style={styles.barcode}>Code-barres : {barcode}</div>}
+            <div style={styles.title}>New product</div>
+            {barcode && <div style={styles.barcode}>Barcode: {barcode}</div>}
           </div>
+          <button style={styles.cancelBtn} onClick={onClose}>Cancel</button>
         </div>
 
         {/* Résultat Open Food Facts */}
@@ -200,12 +201,17 @@ const styles = {
     width: '36px', height: '4px', background: '#E0E0E0',
     borderRadius: '10px', margin: '10px auto 20px',
   },
-  header: { marginBottom: '16px' },
+  header: { marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
   title: {
     fontFamily: "'DM Serif Display', serif",
     fontSize: '20px', color: '#1A1A1A',
   },
   barcode: { fontSize: '12px', color: '#BBB', marginTop: '4px', fontFamily: 'monospace' },
+  cancelBtn: {
+    background: 'none', border: 'none', fontSize: '14px', fontWeight: '500',
+    color: '#999', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+    padding: '4px 0', flexShrink: 0,
+  },
   offLoading: {
     fontSize: '13px', color: '#999', background: '#F9F9F9',
     borderRadius: '10px', padding: '10px 14px', marginBottom: '16px',
