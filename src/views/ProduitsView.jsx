@@ -7,6 +7,7 @@ export default function ProduitsView({ onProductTap }) {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [showNewProduct, setShowNewProduct] = useState(false)
+  const [selectedCategory, setSelectedCategory] = useState('Toutes')
 
   useEffect(() => { fetchProducts() }, [])
 
@@ -21,7 +22,15 @@ export default function ProduitsView({ onProductTap }) {
     setShowNewProduct(false)
   }
 
-  const filtered = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
+  // Récupérer toutes les catégories uniques
+  const categories = ['Toutes', ...new Set(products.map(p => p.category || 'Autre')).sort()]
+
+  // Filtrer par catégorie + recherche
+  const filtered = products.filter(p => {
+    const matchCategory = selectedCategory === 'Toutes' || p.category === selectedCategory
+    const matchSearch = p.name.toLowerCase().includes(search.toLowerCase())
+    return matchCategory && matchSearch
+  })
 
   if (loading) return <div style={{color:'#999',fontSize:'14px',paddingTop:'20px',fontFamily:"'DM Sans',sans-serif"}}>Loading…</div>
 
@@ -37,6 +46,34 @@ export default function ProduitsView({ onProductTap }) {
           >
             <span style={{fontSize:'16px',lineHeight:1}}>+</span> New
           </button>
+        </div>
+
+        {/* Tabs de catégories */}
+        <div style={{display:'flex',gap:'8px',marginBottom:'16px',overflowX:'auto',paddingBottom:'4px',WebkitOverflowScrolling:'touch'}}>
+          {categories.map(cat => (
+              <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  style={{
+                    padding:'8px 14px',
+                    borderRadius:'100px',
+                    border:'none',
+                    background:selectedCategory===cat?'#1A1A1A':'white',
+                    color:selectedCategory===cat?'white':'#999',
+                    fontFamily:"'DM Sans',sans-serif",
+                    fontSize:'13px',
+                    fontWeight:'500',
+                    cursor:'pointer',
+                    whiteSpace:'nowrap',
+                    transition:'all 0.2s ease',
+                    borderWidth:'1px',
+                    borderStyle:'solid',
+                    borderColor:selectedCategory===cat?'#1A1A1A':'#EBEBEB',
+                  }}
+              >
+                {cat}
+              </button>
+          ))}
         </div>
 
         {/* Barre de recherche */}

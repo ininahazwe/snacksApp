@@ -7,6 +7,8 @@ const COLORS = ['#F5C842', '#E84B6E', '#5BAD72', '#C4A8E0', '#8B5E3C', '#F4845F'
 export default function NewProductModal({ barcode, onClose, onCreated }) {
   const [name, setName] = useState('')
   const [price, setPrice] = useState('')
+  const [cost, setCost] = useState('')
+  const [category, setCategory] = useState('Autre')
   const [stock, setStock] = useState('')
   const [emoji, setEmoji] = useState('🍬')
   const [color, setColor] = useState('#F5C842')
@@ -46,6 +48,8 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
       const { data, error } = await supabase.from('products').insert({
         name: name.trim(),
         price: parseInt(price),
+        cost: parseInt(cost) || 0,
+        category: category.trim() || 'Autre',
         stock: parseInt(stock) || 0,
         barcode: barcode || null,
         emoji,
@@ -97,10 +101,21 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
             />
           </div>
 
-          {/* Prix + Stock */}
+          {/* Catégorie */}
+          <div style={styles.fieldGroup}>
+            <div style={styles.fieldLabel}>Catégorie</div>
+            <input
+                style={styles.input}
+                placeholder="Ex : Bonbons, Chocolats, Caramels, etc."
+                value={category}
+                onChange={e => setCategory(e.target.value)}
+            />
+          </div>
+
+          {/* Prix vente + Prix achat + Stock */}
           <div style={{ display: 'flex', gap: '12px' }}>
             <div style={{ ...styles.fieldGroup, flex: 1 }}>
-              <div style={styles.fieldLabel}>Prix (GH₵) *</div>
+              <div style={styles.fieldLabel}>Prix vente (GH₵) *</div>
               <input
                   style={styles.input}
                   type="number"
@@ -110,15 +125,27 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
               />
             </div>
             <div style={{ ...styles.fieldGroup, flex: 1 }}>
-              <div style={styles.fieldLabel}>Stock initial</div>
+              <div style={styles.fieldLabel}>Prix achat (GH₵)</div>
               <input
                   style={styles.input}
                   type="number"
-                  placeholder="0"
-                  value={stock}
-                  onChange={e => setStock(e.target.value)}
+                  placeholder="300"
+                  value={cost}
+                  onChange={e => setCost(e.target.value)}
               />
             </div>
+          </div>
+
+          {/* Stock */}
+          <div style={styles.fieldGroup}>
+            <div style={styles.fieldLabel}>Stock initial</div>
+            <input
+                style={styles.input}
+                type="number"
+                placeholder="0"
+                value={stock}
+                onChange={e => setStock(e.target.value)}
+            />
           </div>
 
           {/* Emoji */}
