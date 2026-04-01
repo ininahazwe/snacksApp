@@ -23,7 +23,7 @@ export default function ProduitsView({ onProductTap }) {
   }
 
   // Récupérer toutes les catégories uniques
-  const categories = ['Toutes', ...new Set(products.map(p => p.category || 'Autre')).sort()]
+  const categories = ['Toutes', ...Array.from(new Set(products.map(p => p.category || 'Autre'))).sort()]
 
   // Filtrer par catégorie + recherche
   const filtered = products.filter(p => {
