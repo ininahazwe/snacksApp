@@ -116,7 +116,7 @@ export default function ClientsView() {
               </div>
               <div style={{ textAlign: 'right' }}>
                 {c.debt > 0
-                  ? <div style={s.detteAmount}>−{c.debt.toLocaleString()} F</div>
+                  ? <div style={s.detteAmount}>−{c.debt.toLocaleString()} GH₵</div>
                   : <div style={s.cleared}>✓ Cleared</div>
                 }
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#CCC" strokeWidth="2" style={{ marginTop: '4px' }}>
@@ -174,7 +174,7 @@ export default function ClientsView() {
                   style={s.fullPayBtn}
                   onClick={() => setMontantRemboursement(String(selectedClient.debt))}
                 >
-                  Pay full amount ({selectedClient.debt.toLocaleString()} F)
+                  Pay full amount ({selectedClient.debt.toLocaleString()} GH₵)
                 </button>
               </div>
             )}
@@ -195,7 +195,7 @@ export default function ClientsView() {
                       <div style={s.histDate}>{formatDate(v.created_at)} · ×{v.qty}</div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={s.histMontant}>{v.amount?.toLocaleString()} F</div>
+                      <div style={s.histMontant}>{v.amount?.toLocaleString()} GH₵</div>
                       <span style={v.type === 'cash' ? s.badgeCash : s.badgeDette}>
                         {v.type === 'cash' ? 'Paid' : 'Credit'}
                       </span>

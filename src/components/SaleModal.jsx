@@ -26,7 +26,25 @@ export default function SaleModal({ product, onClose, onSuccess }) {
   const handleSubmit = async () => {
     setLoading(true)
     try {
-      // 1. Enregistrer la vente
+      // 1. Récupérer le batch ACTIF (le plus ancien non épuisé) - FIFO
+      const { data: batches, error: batchError } = await supabase
+          .from('stock_batches')
+          .select('*')
+          .eq('product_id', product.id)
+          .is('exhausted_at', null)
+          .order('received_at', { ascending: true })
+          .limit(1)
+
+      if (batchError) throw batchError
+      const activeBatch = batches?.[0]
+
+      if (!activeBatch) {
+        alert('Aucun batch actif pour ce produit')
+        setLoading(false)
+        return
+      }
+
+      // 2. Enregistrer la vente
       const { error: saleError } = await supabase.from('sales').insert({
         product_id: product.id,
         client_id: selectedClient?.id ?? null,
@@ -37,21 +55,40 @@ export default function SaleModal({ product, onClose, onSuccess }) {
       })
       if (saleError) throw saleError
 
-      // 2. Décrémenter le stock du produit
+      // 3. Décrémenter le stock du produit
+      const newStock = product.stock - qty
       const { error: stockError } = await supabase
           .from('products')
-          .update({ stock: product.stock - qty })
+          .update({ stock: newStock })
           .eq('id', product.id)
       if (stockError) throw stockError
 
-      // 3. Enregistrer le mouvement de stock
-      await supabase.from('stock_movements').insert({
+      // 4. Enregistrer le mouvement de stock avec le batch_id
+      const { error: movError } = await supabase.from('stock_movements').insert({
         product_id: product.id,
+        batch_id: activeBatch.id,
         delta: -qty,
         reason: 'vente',
       })
+      if (movError) console.error('Erreur mouvement:', movError)
 
-      // 4. Si dette, incrémenter la dette du client
+      // 5. Si le batch est maintenant épuisé (stock = 0), marquer exhausted_at + calculer duration_days
+      if (newStock <= 0) {
+        const now = new Date()
+        const received = new Date(activeBatch.received_at)
+        const durationDays = Math.round((now - received) / (1000 * 60 * 60 * 24))
+
+        const { error: batchUpdateError } = await supabase
+            .from('stock_batches')
+            .update({
+              exhausted_at: now.toISOString(),
+              duration_days: durationDays,
+            })
+            .eq('id', activeBatch.id)
+        if (batchUpdateError) console.error('Erreur update batch:', batchUpdateError)
+      }
+
+      // 6. Si dette, incrémenter la dette du client
       if (paymentType === 'dette' && selectedClient) {
         await supabase
             .from('clients')
@@ -59,7 +96,7 @@ export default function SaleModal({ product, onClose, onSuccess }) {
             .eq('id', selectedClient.id)
       }
 
-      onSuccess(`✓ Vente enregistrée — ${total.toLocaleString()} F CFA`)
+      onSuccess(`✓ Vente enregistrée — ${total.toLocaleString()} GH₵`)
     } catch (err) {
       console.error('Erreur vente:', err)
       alert('Erreur lors de l\'enregistrement. Réessaie.')
@@ -80,7 +117,7 @@ export default function SaleModal({ product, onClose, onSuccess }) {
             </div>
             <div>
               <div style={styles.productName}>{product.name}</div>
-              <div style={styles.productPrice}>{product.price.toLocaleString()} F CFA · unité</div>
+              <div style={styles.productPrice}>{product.price.toLocaleString()} GH₵ · unité</div>
             </div>
           </div>
 
@@ -124,7 +161,7 @@ export default function SaleModal({ product, onClose, onSuccess }) {
                         </div>
                         <span style={styles.clientOptionName}>{c.name}</span>
                         {c.debt > 0 && (
-                            <span style={styles.debtBadge}>−{c.debt.toLocaleString()} F</span>
+                            <span style={styles.debtBadge}>−{c.debt.toLocaleString()} GH₵</span>
                         )}
                       </div>
                   ))}
@@ -167,7 +204,7 @@ export default function SaleModal({ product, onClose, onSuccess }) {
           {/* Total */}
           <div style={styles.totalLine}>
             <span style={styles.totalLabel}>Total</span>
-            <span style={styles.totalValue}>{total.toLocaleString()} F CFA</span>
+            <span style={styles.totalValue}>{total.toLocaleString()} GH₵</span>
           </div>
 
           {/* Bouton */}

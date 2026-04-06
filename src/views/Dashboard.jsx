@@ -157,7 +157,7 @@ export default function Dashboard({ onProductTap }) {
                       <div style={s.topEmoji}>{p.emoji ?? '🍬'}</div>
                       <div style={{ flex: 1 }}>
                         <div style={s.topNom}>{p.nom}</div>
-                        <div style={s.topQty}>{p.qty} sold · {p.total.toLocaleString()} F</div>
+                        <div style={s.topQty}>{p.qty} sold · {p.total.toLocaleString()} GH₵</div>
                       </div>
                     </div>
                 ))}
@@ -178,7 +178,7 @@ export default function Dashboard({ onProductTap }) {
                         <div style={s.topNom}>{c.nom}</div>
                         <div style={s.topQty}>{c.nb} transaction{c.nb !== 1 ? 's' : ''}</div>
                       </div>
-                      <div style={s.topMontant}>{c.total.toLocaleString()} F</div>
+                      <div style={s.topMontant}>{c.total.toLocaleString()} GH₵</div>
                     </div>
                 ))}
               </div>
@@ -215,7 +215,7 @@ export default function Dashboard({ onProductTap }) {
                         <div style={s.topNom}>{c.name}</div>
                         <div style={s.topQty}>Outstanding balance</div>
                       </div>
-                      <div style={{ ...s.topMontant, color: '#C45000', fontWeight: '600' }}>{c.debt.toLocaleString()} F</div>
+                      <div style={{ ...s.topMontant, color: '#C45000', fontWeight: '600' }}>{c.debt.toLocaleString()} GH₵</div>
                     </div>
                 ))}
               </div>
@@ -236,7 +236,7 @@ export default function Dashboard({ onProductTap }) {
                       <div style={s.saleMeta}>{v.clients?.name ?? 'Unknown'} · {formatDate(v.created_at)}</div>
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={s.saleAmount}>{v.amount?.toLocaleString()} F</div>
+                      <div style={s.saleAmount}>{v.amount?.toLocaleString()} GH₵</div>
                       <span style={v.type === 'cash' ? s.badgeCash : s.badgeDette}>
                   {v.type === 'cash' ? 'Paid' : 'Credit'}
                 </span>

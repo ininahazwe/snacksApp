@@ -57,6 +57,18 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
       }).select().single()
 
       if (error) throw error
+
+      // Si stock initial > 0, créer un batch automatiquement
+      const initialQty = parseInt(stock) || 0
+      if (initialQty > 0) {
+        const { error: batchError } = await supabase.from('stock_batches').insert({
+          product_id: data.id,
+          received_qty: initialQty,
+          received_at: new Date().toISOString(),
+        })
+        if (batchError) console.error('Erreur création batch:', batchError)
+      }
+
       onCreated(data)
     } catch (err) {
       console.error('Erreur création produit:', err)
