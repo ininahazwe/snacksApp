@@ -9,7 +9,7 @@ export default function StocksView() {
   const [nouvelleQte, setNouvelleQte] = useState('')
   const [saving, setSaving] = useState(false)
   const [filtre, setFiltre] = useState('all') // 'all' | 'low' | 'ok'
-  const [selectedProductId, setSelectedProductId] = useState(null)
+  const [expandedId, setExpandedId] = useState(null) // Quel produit est ouvert
 
   useEffect(() => {
     fetchProduits()
@@ -33,7 +33,8 @@ export default function StocksView() {
     setBatches(data ?? [])
   }
 
-  const ouvrirAjoutBatch = (produit) => {
+  const ouvrirAjoutBatch = (produit, e) => {
+    e.stopPropagation() // Ne pas fermer l'expandable
     setEditProduit(produit)
     setNouvelleQte('')
   }
@@ -44,7 +45,6 @@ export default function StocksView() {
     setSaving(true)
 
     try {
-      // 1. Créer le batch
       const { data: newBatch, error: batchError } = await supabase
           .from('stock_batches')
           .insert({
@@ -57,7 +57,6 @@ export default function StocksView() {
 
       if (batchError) throw batchError
 
-      // 2. Ajouter au stock du produit
       const nouveauStock = editProduit.stock + qty
       const { error: stockError } = await supabase
           .from('products')
@@ -65,7 +64,6 @@ export default function StocksView() {
           .eq('id', editProduit.id)
       if (stockError) throw stockError
 
-      // 3. Enregistrer le mouvement de stock
       const { error: movError } = await supabase
           .from('stock_movements')
           .insert({
@@ -76,7 +74,6 @@ export default function StocksView() {
           })
       if (movError) console.error('Erreur mouvement:', movError)
 
-      // Rafraîchir les données
       await fetchProduits()
       await fetchBatches()
       setEditProduit(null)
@@ -98,10 +95,6 @@ export default function StocksView() {
   const stockBas = produits.filter(p => p.stock < 10).length
   const stockTotal = produits.reduce((sum, p) => sum + p.stock, 0)
   const maxStock = Math.max(...produits.map(p => p.stock), 1)
-
-  // Batches pour le produit sélectionné
-  const selectedProduct = selectedProductId ? produits.find(p => p.id === selectedProductId) : null
-  const productBatches = selectedProduct ? batches.filter(b => b.product_id === selectedProductId) : []
 
   if (loading) return <div style={s.loading}>Loading…</div>
 
@@ -136,140 +129,145 @@ export default function StocksView() {
           ))}
         </div>
 
-        {/* Liste produits */}
+        {/* Liste produits avec expandables */}
         {liste.length === 0 ? (
             <div style={s.empty}><div style={{ fontSize: '32px', marginBottom: '12px' }}>📦</div>No products found</div>
         ) : (
-            <div style={s.card}>
-              {liste.map((p, i) => {
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {liste.map((p) => {
                 const pct = Math.min(p.stock / maxStock * 100, 100)
                 const isLow = p.stock < 10
+                const isExpanded = expandedId === p.id
+                const productBatches = batches.filter(b => b.product_id === p.id)
+
                 return (
-                    <div key={p.id} style={{ ...s.stockRow, borderBottom: i < liste.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                      <div style={{ ...s.prodEmoji, background: (p.color ?? '#EEE') + '22' }}>{p.emoji ?? '🍬'}</div>
-                      <div style={s.barWrap}>
-                        <div style={s.barHeader}>
-                          <span style={s.prodNom}>{p.name}</span>
-                          <span style={{ ...s.stockQte, color: isLow ? '#C45000' : '#999' }}>
-                      {isLow ? '⚠ ' : ''}{p.stock} units
-                    </span>
+                    <div key={p.id} style={{ overflow: 'hidden' }}>
+                      {/* Row produit - cliquable pour expand */}
+                      <div
+                          onClick={() => setExpandedId(isExpanded ? null : p.id)}
+                          style={{
+                            ...s.productRow,
+                            background: isExpanded ? '#F9F9F9' : 'white',
+                            borderBottomLeftRadius: isExpanded ? 0 : '18px',
+                            borderBottomRightRadius: isExpanded ? 0 : '18px',
+                          }}
+                      >
+                        <div style={{ ...s.prodEmoji, background: (p.color ?? '#EEE') + '22' }}>{p.emoji ?? '🍬'}</div>
+                        <div style={s.barWrap}>
+                          <div style={s.barHeader}>
+                            <span style={s.prodNom}>{p.name}</span>
+                            <span style={{ ...s.stockQte, color: isLow ? '#C45000' : '#999' }}>
+                        {isLow ? '⚠ ' : ''}{p.stock}
+                      </span>
+                          </div>
+                          <div style={s.barTrack}>
+                            <div style={{
+                              ...s.barFill,
+                              width: `${pct}%`,
+                              background: isLow
+                                  ? 'linear-gradient(90deg,#FFAB76,#C45000)'
+                                  : `linear-gradient(90deg,${p.color ?? '#5BAD72'}88,${p.color ?? '#5BAD72'})`,
+                            }} />
+                          </div>
                         </div>
-                        <div style={s.barTrack}>
-                          <div style={{
-                            ...s.barFill,
-                            width: `${pct}%`,
-                            background: isLow
-                                ? 'linear-gradient(90deg,#FFAB76,#C45000)'
-                                : `linear-gradient(90deg,${p.color ?? '#5BAD72'}88,${p.color ?? '#5BAD72'})`,
-                          }} />
+
+                        {/* Bouton expand + add batch */}
+                        <button
+                            onClick={(e) => ouvrirAjoutBatch(p, e)}
+                            style={s.addBatchBtn}
+                            title="Add batch"
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                          </svg>
+                        </button>
+
+                        {/* Chevron expand */}
+                        <div style={{
+                          width: '20px',
+                          height: '20px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: '#999',
+                          transform: isExpanded ? 'rotate(180deg)' : 'rotate(0)',
+                          transition: 'transform 0.2s ease',
+                          cursor: 'pointer',
+                        }}>
+                          ▼
                         </div>
                       </div>
-                      <button style={s.addBatchBtn} onClick={() => ouvrirAjoutBatch(p)} title="Add batch">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-                        </svg>
-                      </button>
+
+                      {/* Section batches - affichée si expanded */}
+                      {isExpanded && (
+                          <div style={s.expandedSection}>
+                            {productBatches.length === 0 ? (
+                                <div style={{ padding: '16px', textAlign: 'center', color: '#BBB', fontSize: '12px' }}>
+                                  No batches yet
+                                </div>
+                            ) : (
+                                <div>
+                                  {productBatches.map((batch, i) => {
+                                    const received = new Date(batch.received_at)
+                                    const exhausted = batch.exhausted_at ? new Date(batch.exhausted_at) : new Date()
+                                    const days = batch.duration_days ?? Math.round((exhausted - received) / (1000 * 60 * 60 * 24))
+                                    const isActive = batch.exhausted_at === null
+
+                                    return (
+                                        <div
+                                            key={batch.id}
+                                            style={{
+                                              ...s.batchRow,
+                                              borderBottom: i < productBatches.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none',
+                                            }}
+                                        >
+                                          <div style={{
+                                            ...s.statusBadge,
+                                            background: isActive ? '#E8F5EC' : '#FFF0E8',
+                                            color: isActive ? '#2E7D42' : '#C45000',
+                                          }}>
+                                            {isActive ? '🟢' : '✓'}
+                                          </div>
+
+                                          <div style={{ flex: 1, minWidth: 0 }}>
+                                            <div style={s.batchInfo}>
+                                              <div>
+                                                <div style={s.batchQty}>{batch.received_qty} units</div>
+                                                <div style={s.batchDate}>{received.toLocaleDateString('en', { month: 'short', day: 'numeric' })}</div>
+                                              </div>
+                                              {batch.exhausted_at && (
+                                                  <div style={{ textAlign: 'right' }}>
+                                                    <div style={s.batchQty}>Exhausted</div>
+                                                    <div style={s.batchDate}>{exhausted.toLocaleDateString('en', { month: 'short', day: 'numeric' })}</div>
+                                                  </div>
+                                              )}
+                                            </div>
+
+                                            <div style={{ marginTop: '6px' }}>
+                                              <div style={s.timelineBar}>
+                                                <div style={{
+                                                  ...s.timelineFill,
+                                                  width: '100%',
+                                                  background: isActive ? 'linear-gradient(90deg, #5BAD72, #2E7D42)' : 'linear-gradient(90deg, #C4A8E0, #999)',
+                                                }} />
+                                              </div>
+                                              <div style={{ fontSize: '10px', color: '#999', marginTop: '3px' }}>
+                                                {days}d {isActive ? '(ongoing)' : '(done)'}
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                    )
+                                  })}
+                                </div>
+                            )}
+                          </div>
+                      )}
                     </div>
                 )
               })}
             </div>
         )}
-
-        {/* Graphique Timeline des Batches */}
-        <div style={{ marginTop: '32px' }}>
-          <p style={s.titre}>Batch Lifecycle</p>
-
-          {/* Sélecteur de produit */}
-          {produits.length > 0 && (
-              <div style={s.fieldGroup}>
-                <div style={s.fieldLabel}>Select product</div>
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
-                  {produits.map(p => (
-                      <button
-                          key={p.id}
-                          onClick={() => setSelectedProductId(p.id)}
-                          style={{
-                            padding: '8px 14px',
-                            borderRadius: '100px',
-                            border: 'none',
-                            background: selectedProductId === p.id ? '#1A1A1A' : 'white',
-                            color: selectedProductId === p.id ? 'white' : '#999',
-                            fontFamily: "'DM Sans', sans-serif",
-                            fontSize: '12px',
-                            fontWeight: '500',
-                            cursor: 'pointer',
-                            transition: 'all 0.2s ease',
-                            borderWidth: '1px',
-                            borderStyle: 'solid',
-                            borderColor: selectedProductId === p.id ? '#1A1A1A' : '#EBEBEB',
-                          }}
-                      >
-                        {p.emoji} {p.name}
-                      </button>
-                  ))}
-                </div>
-              </div>
-          )}
-
-          {/* Timeline des batches */}
-          {selectedProduct && productBatches.length === 0 ? (
-              <div style={{ ...s.empty, padding: '24px' }}>No batches yet for this product</div>
-          ) : selectedProduct ? (
-              <div style={s.card}>
-                {productBatches.map((batch, i) => {
-                  const received = new Date(batch.received_at)
-                  const exhausted = batch.exhausted_at ? new Date(batch.exhausted_at) : new Date()
-                  const days = batch.duration_days ?? Math.round((exhausted - received) / (1000 * 60 * 60 * 24))
-                  const isActive = batch.exhausted_at === null
-
-                  return (
-                      <div key={batch.id} style={{ ...s.batchRow, borderBottom: i < productBatches.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                        {/* Badge actif/épuisé */}
-                        <div style={{
-                          ...s.statusBadge,
-                          background: isActive ? '#E8F5EC' : '#FFF0E8',
-                          color: isActive ? '#2E7D42' : '#C45000',
-                        }}>
-                          {isActive ? '🟢 Active' : '✓ Done'}
-                        </div>
-
-                        {/* Info batch */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={s.batchInfo}>
-                            <div>
-                              <div style={s.batchQty}>Received: {batch.received_qty} units</div>
-                              <div style={s.batchDate}>{received.toLocaleDateString('en', { month: 'short', day: 'numeric', year: '2-digit' })}</div>
-                            </div>
-                            {batch.exhausted_at && (
-                                <div>
-                                  <div style={s.batchQty}>Exhausted</div>
-                                  <div style={s.batchDate}>{exhausted.toLocaleDateString('en', { month: 'short', day: 'numeric', year: '2-digit' })}</div>
-                                </div>
-                            )}
-                          </div>
-
-                          {/* Timeline bar */}
-                          <div style={{ marginTop: '8px' }}>
-                            <div style={s.timelineBar}>
-                              <div style={{
-                                ...s.timelineFill,
-                                width: isActive ? '100%' : '100%',
-                                background: isActive ? 'linear-gradient(90deg, #5BAD72, #2E7D42)' : 'linear-gradient(90deg, #C4A8E0, #999)',
-                              }} />
-                            </div>
-                            <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
-                              {days} day{days !== 1 ? 's' : ''} {isActive ? '(ongoing)' : '(completed)'}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                  )
-                })}
-              </div>
-          ) : (
-              <div style={{ ...s.empty, padding: '24px' }}>👈 Select a product to see batch history</div>
-          )}
-        </div>
 
         {/* Modal ajout batch */}
         {editProduit && (
@@ -303,7 +301,6 @@ export default function StocksView() {
                   )}
                 </div>
 
-                {/* Raccourcis */}
                 <div style={s.shortcutRow}>
                   {[50, 100, 150, 200].map(n => (
                       <button key={n} style={s.shortcut} onClick={() => setNouvelleQte(String(n))}>+{n}</button>
@@ -326,7 +323,7 @@ export default function StocksView() {
 
 const s = {
   loading: { color: '#999', fontSize: '14px', paddingTop: '20px' },
-  titre: { fontFamily: "'DM Serif Display', serif", fontSize: '18px', color: '#1A1A1A', marginBottom: '16px' },
+  titre: { fontFamily: "'DM Serif Display', serif", fontSize: '18px', color: '#1A1A1A', marginBottom: '16px', marginBottom: '16px' },
   kpiRow: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' },
   kpiCard: { background: 'white', borderRadius: '16px', padding: '16px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' },
   kpiLabel: { fontSize: '11px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' },
@@ -335,8 +332,8 @@ const s = {
   filterBtn: { padding: '7px 14px', borderRadius: '100px', border: '1.5px solid #EBEBEB', background: 'white', fontSize: '12.5px', fontWeight: '500', color: '#999', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
   filterBtnActive: { background: '#1A1A1A', color: 'white', borderColor: '#1A1A1A' },
   empty: { textAlign: 'center', padding: '48px 24px', color: '#BBB', fontSize: '14px' },
-  card: { background: 'white', borderRadius: '18px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)', overflow: 'hidden', marginBottom: '20px' },
-  stockRow: { display: 'flex', alignItems: 'center', padding: '14px 16px', gap: '12px' },
+  productRow: { background: 'white', borderRadius: '18px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)', display: 'flex', alignItems: 'center', padding: '14px 16px', gap: '12px', cursor: 'pointer', transition: 'all 0.2s ease' },
+  expandedSection: { background: '#F9F9F9', borderRadius: '0 0 18px 18px', border: '1px solid rgba(0,0,0,0.05)', borderTop: 'none', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' },
   prodEmoji: { width: '38px', height: '38px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 },
   barWrap: { flex: 1, minWidth: 0 },
   barHeader: { display: 'flex', justifyContent: 'space-between', marginBottom: '5px' },
@@ -344,14 +341,14 @@ const s = {
   stockQte: { fontSize: '12px' },
   barTrack: { height: '4px', background: '#F0F0F0', borderRadius: '10px', overflow: 'hidden' },
   barFill: { height: '100%', borderRadius: '10px', transition: 'width 0.6s ease' },
-  addBatchBtn: { width: '32px', height: '32px', borderRadius: '50%', background: '#F5F5F5', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1A1A1A', flexShrink: 0 },
+  addBatchBtn: { width: '32px', height: '32px', borderRadius: '50%', background: '#F5F5F5', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1A1A1A', flexShrink: 0, transition: 'all 0.2s ease' },
   fieldGroup: { marginBottom: '16px' },
   fieldLabel: { fontSize: '11.5px', fontWeight: '600', color: '#999', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '8px' },
-  batchRow: { display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '14px 16px' },
+  batchRow: { display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '12px 16px' },
   statusBadge: { padding: '4px 8px', borderRadius: '100px', fontSize: '11px', fontWeight: '500', whiteSpace: 'nowrap', flexShrink: 0 },
-  batchInfo: { display: 'flex', gap: '20px', marginBottom: '8px' },
-  batchQty: { fontSize: '13px', fontWeight: '500', color: '#1A1A1A' },
-  batchDate: { fontSize: '11px', color: '#999', marginTop: '2px' },
+  batchInfo: { display: 'flex', gap: '16px', marginBottom: '6px' },
+  batchQty: { fontSize: '12px', fontWeight: '500', color: '#1A1A1A' },
+  batchDate: { fontSize: '10px', color: '#999', marginTop: '1px' },
   timelineBar: { height: '3px', background: '#F0F0F0', borderRadius: '10px', overflow: 'hidden' },
   timelineFill: { height: '100%', borderRadius: '10px' },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' },
