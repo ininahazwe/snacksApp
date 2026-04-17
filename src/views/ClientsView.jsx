@@ -89,7 +89,7 @@ export default function ClientsView() {
         <div style={s.kpiCard}>
           <div style={s.kpiLabel}>Outstanding debt</div>
           <div style={{ ...s.kpiValue, color: totalDettes > 0 ? '#C45000' : '#2E7D42' }}>
-            {totalDettes.toLocaleString()} F
+            {totalDettes.toLocaleString()} GH₵
           </div>
         </div>
         <div style={s.kpiCard}>

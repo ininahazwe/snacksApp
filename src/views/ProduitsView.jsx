@@ -101,7 +101,7 @@ export default function ProduitsView({ onProductTap }) {
                       {p.emoji ?? '🍬'}
                     </div>
                     <div style={{fontSize:'13px',fontWeight:'500',color:'#1A1A1A',marginBottom:'6px',lineHeight:1.3}}>{p.name}</div>
-                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'15px',color:'#1A1A1A'}}>{p.price?.toLocaleString()} F</div>
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'15px',color:'#1A1A1A'}}>{p.price?.toLocaleString()} GH₵</div>
                     <div style={{fontSize:'11px',marginTop:'3px',color:p.stock<10?'#C45000':'#999'}}>
                       {p.stock < 10 ? '⚠ ' : ''}{p.stock} in stock
                     </div>
