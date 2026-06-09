@@ -1,0 +1,26 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background: #F7F6F3;
+  font-family: 'DM Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
+}
+
+input:focus {
+  border-color: #1A1A1A !important;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::-webkit-scrollbar {
+  display: none;
+}
