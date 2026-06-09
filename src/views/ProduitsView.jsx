@@ -23,11 +23,11 @@ export default function ProduitsView({ onProductTap }) {
   }
 
   // Récupérer toutes les catégories uniques
-  const categories = ['Toutes', ...Array.from(new Set(products.map(p => p.category || 'Autre'))).sort()]
+  const categories = ['All', ...Array.from(new Set(products.map(p => p.category || 'Other'))).sort()]
 
   // Filtrer par catégorie + recherche
   const filtered = products.filter(p => {
-    const matchCategory = selectedCategory === 'Toutes' || p.category === selectedCategory
+    const matchCategory = selectedCategory === 'All' || p.category === selectedCategory
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase())
     return matchCategory && matchSearch
   })

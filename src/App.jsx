@@ -89,7 +89,7 @@ function AppLayout() {
         <div style={st.header}>
           <div style={st.headerTop}>
             <div>
-              <div style={st.brand}>Douceurs<span style={st.brandDot} /></div>
+              <div style={st.brand}>Store<span style={st.brandDot} /></div>
               <div style={st.roleBadge}>
                 {role === 'gerant' ? '👑 Manager' : '🏪 Cashier'} · {user?.email}
               </div>

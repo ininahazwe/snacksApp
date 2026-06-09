@@ -152,7 +152,7 @@ export default function Dashboard({ onProductTap }) {
               <p style={s.sectionTitle}>🔥 Top 5 products · this month</p>
               <div style={s.card}>
                 {topProduits.map((p, i) => (
-                    <div key={i} style={{ ...s.topRow, borderBottom: i < topProduits.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
+                    <div key={p.nom ?? i} style={{ ...s.topRow, borderBottom: i < topProduits.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
                       <div style={s.topRank}>#{i + 1}</div>
                       <div style={s.topEmoji}>{p.emoji ?? '🍬'}</div>
                       <div style={{ flex: 1 }}>
@@ -171,7 +171,7 @@ export default function Dashboard({ onProductTap }) {
               <p style={s.sectionTitle}>👥 Top 5 clients · this month</p>
               <div style={s.card}>
                 {topClients.map((c, i) => (
-                    <div key={i} style={{ ...s.topRow, borderBottom: i < topClients.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
+                    <div key={c.nom ?? i} style={{ ...s.topRow, borderBottom: i < topClients.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
                       <div style={s.topRank}>#{i + 1}</div>
                       <div style={s.topEmoji}>👤</div>
                       <div style={{ flex: 1 }}>
@@ -191,7 +191,7 @@ export default function Dashboard({ onProductTap }) {
               <p style={s.sectionTitle}>⚠️ Low stock · Alert</p>
               <div style={s.card}>
                 {stockCritique.map((p, i) => (
-                    <div key={i} style={{ ...s.topRow, borderBottom: i < stockCritique.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none', backgroundColor: i % 2 === 0 ? 'rgba(196, 80, 0, 0.02)' : 'transparent' }}>
+                    <div key={p.id} style={{ ...s.topRow, borderBottom: i < stockCritique.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none', backgroundColor: i % 2 === 0 ? 'rgba(196, 80, 0, 0.02)' : 'transparent' }}>
                       <div style={{ ...s.topEmoji, fontSize: '16px' }}>{p.emoji ?? '🍬'}</div>
                       <div style={{ flex: 1 }}>
                         <div style={s.topNom}>{p.name}</div>
@@ -209,7 +209,7 @@ export default function Dashboard({ onProductTap }) {
               <p style={s.sectionTitle}>💳 Clients with debt</p>
               <div style={s.card}>
                 {clientsDebiteurs.map((c, i) => (
-                    <div key={i} style={{ ...s.topRow, borderBottom: i < clientsDebiteurs.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
+                    <div key={c.id} style={{ ...s.topRow, borderBottom: i < clientsDebiteurs.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
                       <div style={s.topEmoji}>👤</div>
                       <div style={{ flex: 1 }}>
                         <div style={s.topNom}>{c.name}</div>
