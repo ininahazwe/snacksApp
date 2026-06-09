@@ -32,7 +32,7 @@ export default function LoginPage() {
         <div style={styles.logoWrap}>
           <span style={styles.logoEmoji}>🍬</span>
         </div>
-        <h1 style={styles.title}>Douceurs</h1>
+        <h1 style={styles.title}>Store</h1>
         <p style={styles.subtitle}>Sign in to access the POS</p>
 
         {/* Form */}

@@ -104,7 +104,7 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
 
           {/* Nom */}
           <div style={styles.fieldGroup}>
-            <div style={styles.fieldLabel}>Nom du produit *</div>
+            <div style={styles.fieldLabel}>Name *</div>
             <input
                 style={styles.input}
                 placeholder="Ex : Caramel Fleur de Sel"
@@ -115,7 +115,7 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
 
           {/* Catégorie */}
           <div style={styles.fieldGroup}>
-            <div style={styles.fieldLabel}>Catégorie</div>
+            <div style={styles.fieldLabel}>Category</div>
             <input
                 style={styles.input}
                 placeholder="Ex : Bonbons, Chocolats, Caramels, etc."
@@ -127,7 +127,7 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
           {/* Prix vente + Prix achat + Stock */}
           <div style={{ display: 'flex', gap: '12px' }}>
             <div style={{ ...styles.fieldGroup, flex: 1 }}>
-              <div style={styles.fieldLabel}>Prix vente (GH₵) *</div>
+              <div style={styles.fieldLabel}>Selling price (GH₵) *</div>
               <input
                   style={styles.input}
                   type="number"
@@ -137,7 +137,7 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
               />
             </div>
             <div style={{ ...styles.fieldGroup, flex: 1 }}>
-              <div style={styles.fieldLabel}>Prix achat (GH₵)</div>
+              <div style={styles.fieldLabel}>Buying price (GH₵)</div>
               <input
                   style={styles.input}
                   type="number"
@@ -150,7 +150,7 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
 
           {/* Stock */}
           <div style={styles.fieldGroup}>
-            <div style={styles.fieldLabel}>Stock initial</div>
+            <div style={styles.fieldLabel}>Initial stock</div>
             <input
                 style={styles.input}
                 type="number"
@@ -162,7 +162,7 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
 
           {/* Emoji */}
           <div style={styles.fieldGroup}>
-            <div style={styles.fieldLabel}>Icône</div>
+            <div style={styles.fieldLabel}>Icon</div>
             <div style={styles.emojiGrid}>
               {EMOJIS.map(e => (
                   <button
@@ -182,7 +182,7 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
 
           {/* Couleur */}
           <div style={styles.fieldGroup}>
-            <div style={styles.fieldLabel}>Couleur</div>
+            <div style={styles.fieldLabel}>Colour</div>
             <div style={styles.colorGrid}>
               {COLORS.map(c => (
                   <button
@@ -203,7 +203,7 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
           <div style={styles.preview}>
             <div style={{ ...styles.previewEmoji, background: color + '22' }}>{emoji}</div>
             <div>
-              <div style={styles.previewName}>{name || 'Nom du produit'}</div>
+              <div style={styles.previewName}>{name || 'Product name'}</div>
               <div style={styles.previewPrice}>{price ? parseInt(price).toLocaleString() + ' GH₵' : '— GH₵'}</div>
             </div>
           </div>
@@ -216,7 +216,7 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
               onClick={handleSubmit}
               disabled={!name || !price || loading}
           >
-            {loading ? 'Enregistrement…' : 'Créer le produit'}
+            {loading ? 'Saving…' : 'Create the product'}
           </button>
         </div>
       </div>
