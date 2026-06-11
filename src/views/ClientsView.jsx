@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { formatPrice, round2 } from '../lib/format'
 
 export default function ClientsView() {
   const [clients, setClients] = useState([])
@@ -40,10 +41,10 @@ export default function ClientsView() {
   }
 
   const enregistrerPaiement = async () => {
-    const montant = parseInt(montantRemboursement)
+    const montant = parseFloat(montantRemboursement)
     if (!montant || montant <= 0) return
     setSavingPaiement(true)
-    const nouvelleDette = Math.max(0, selectedClient.debt - montant)
+    const nouvelleDette = round2(Math.max(0, selectedClient.debt - montant))
     await supabase
       .from('clients')
       .update({ debt: nouvelleDette })
@@ -115,10 +116,9 @@ export default function ClientsView() {
                 <div style={s.clientTel}>{c.phone ?? 'No phone'}</div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                {c.debt > 0
-                  ? <div style={s.detteAmount}>−{c.debt.toLocaleString()} GH₵</div>
-                  : <div style={s.cleared}>✓ Cleared</div>
-                }
+                {c.debt > 0 && <div style={s.detteAmount}>−{formatPrice(c.debt)} GH₵</div>}
+                {c.credit > 0 && <div style={s.creditAmount}>+{formatPrice(c.credit)} GH₵ credit</div>}
+                {!(c.debt > 0) && !(c.credit > 0) && <div style={s.cleared}>✓ Cleared</div>}
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#CCC" strokeWidth="2" style={{ marginTop: '4px' }}>
                   <polyline points="9 18 15 12 9 6" />
                 </svg>
@@ -150,6 +150,16 @@ export default function ClientsView() {
               </div>
             </div>
 
+            {/* Avoir (store credit) */}
+            {selectedClient.credit > 0 && (
+                <div style={{ ...s.detteBanner, background: '#E8F5EC' }}>
+                  <div style={s.detteBannerLabel}>Store credit</div>
+                  <div style={{ ...s.detteBannerValue, color: '#2E7D42' }}>
+                    +{formatPrice(selectedClient.credit)} GH₵
+                  </div>
+                </div>
+            )}
+
             {/* Enregistrer un paiement */}
             {selectedClient.debt > 0 && (
               <div style={s.paiementSection}>
@@ -158,6 +168,8 @@ export default function ClientsView() {
                   <input
                     style={s.paiementInput}
                     type="number"
+                    step="0.01"
+                    inputMode="decimal"
                     placeholder="Amount (GH₵)"
                     value={montantRemboursement}
                     onChange={e => setMontantRemboursement(e.target.value)}
@@ -284,4 +296,5 @@ const s = {
   fieldGroup: { marginBottom: '16px' },
   input: { width: '100%', padding: '13px 16px', borderRadius: '12px', border: '1.5px solid #EBEBEB', fontSize: '15px', fontFamily: "'DM Sans', sans-serif", color: '#1A1A1A', outline: 'none', boxSizing: 'border-box' },
   submitBtn: { width: '100%', padding: '16px', background: '#1A1A1A', color: 'white', border: 'none', borderRadius: '16px', fontFamily: "'DM Sans', sans-serif", fontSize: '15px', fontWeight: '500', cursor: 'pointer', marginTop: '8px' },
+  creditAmount: { fontSize: '12px', fontWeight: '600', color: '#2E7D42', marginTop: '2px' },
 }

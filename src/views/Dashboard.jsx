@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { formatPrice, round2 } from '../lib/format'
 
 export default function Dashboard({ onProductTap }) {
   const [stats, setStats] = useState({ today: 0, week: 0, month: 0, nbToday: 0, dettes: 0, stockBas: 0, panieMoyen: 0, cashCount: 0, detteCount: 0 })
@@ -60,7 +61,7 @@ export default function Dashboard({ onProductTap }) {
 
     // Panier moyen
     const totalAmount = salesToday?.reduce((sum, s) => sum + s.amount, 0) ?? 0
-    const panieMoyen = salesToday && salesToday.length > 0 ? Math.round(totalAmount / salesToday.length) : 0
+    const panieMoyen = salesToday && salesToday.length > 0 ? round2(totalAmount / salesToday.length) : 0
 
     setStats({
       today:    salesToday?.filter(s => s.type === 'cash').reduce((sum, s) => sum + s.amount, 0) ?? 0,

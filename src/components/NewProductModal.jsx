@@ -8,18 +8,26 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
   const [name, setName] = useState('')
   const [price, setPrice] = useState('')
   const [cost, setCost] = useState('')
-  const [category, setCategory] = useState('Autre')
+  const [category, setCategory] = useState('')
   const [stock, setStock] = useState('')
   const [emoji, setEmoji] = useState('🍬')
   const [color, setColor] = useState('#F5C842')
   const [loading, setLoading] = useState(false)
   const [fetching, setFetching] = useState(false)
   const [offResult, setOffResult] = useState(null) // Open Food Facts result
+  const [allCategories, setAllCategories] = useState([])
+  const [showCatSuggestions, setShowCatSuggestions] = useState(false)
 
   // Chercher automatiquement sur Open Food Facts au montage
   useEffect(() => {
     if (barcode) fetchFromOpenFoodFacts(barcode)
   }, [barcode])
+
+
+// Charger les catégories existantes au montage (une seule requête)
+  useEffect(() => {
+    fetchCategories()
+  }, [])
 
   const fetchFromOpenFoodFacts = async (code) => {
     setFetching(true)
@@ -41,14 +49,23 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
     }
   }
 
+  const fetchCategories = async () => {
+    const { data } = await supabase.from('products').select('category')
+    if (data) {
+      // Dédoublonner + trier (attention : Array.from obligatoire avant .sort())
+      const cats = Array.from(new Set(data.map(p => p.category || 'Autre'))).sort()
+      setAllCategories(cats)
+    }
+  }
+
   const handleSubmit = async () => {
     if (!name || !price) return
     setLoading(true)
     try {
       const { data, error } = await supabase.from('products').insert({
         name: name.trim(),
-        price: parseInt(price),
-        cost: parseInt(cost) || 0,
+        price: parseFloat(price),
+        cost: parseFloat(cost) || 0,
         category: category.trim() || 'Autre',
         stock: parseInt(stock) || 0,
         barcode: barcode || null,
@@ -77,6 +94,14 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
       setLoading(false)
     }
   }
+
+  // Suggestions : catégories existantes qui matchent la saisie (insensible à la casse)
+  const catSuggestions = allCategories.filter(c =>
+      c.toLowerCase().includes(category.toLowerCase()) &&
+      c.toLowerCase() !== category.toLowerCase()
+  )
+  const isNewCategory = category.trim() &&
+      !allCategories.some(c => c.toLowerCase() === category.trim().toLowerCase())
 
   return (
       <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
@@ -113,15 +138,34 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
             />
           </div>
 
-          {/* Catégorie */}
-          <div style={styles.fieldGroup}>
+          {/* Catégorie avec autocomplete */}
+          <div style={{ ...styles.fieldGroup, position: 'relative' }}>
             <div style={styles.fieldLabel}>Category</div>
             <input
                 style={styles.input}
                 placeholder="Ex : Bonbons, Chocolats, Caramels, etc."
                 value={category}
-                onChange={e => setCategory(e.target.value)}
+                onChange={e => { setCategory(e.target.value); setShowCatSuggestions(true) }}
+                onFocus={() => setShowCatSuggestions(true)}
+                onBlur={() => setShowCatSuggestions(false)}
             />
+            {showCatSuggestions && catSuggestions.length > 0 && (
+                <div style={styles.catDropdown}>
+                  {catSuggestions.map(c => (
+                      <div
+                          key={c}
+                          style={styles.catOption}
+                          // onMouseDown (pas onClick) : se déclenche AVANT le blur de l'input
+                          onMouseDown={e => { e.preventDefault(); setCategory(c); setShowCatSuggestions(false) }}
+                      >
+                        {c}
+                      </div>
+                  ))}
+                </div>
+            )}
+            {/*{isNewCategory && (
+                <div styles={styles.catNewHint}>✨ New category "{category.trim()}" will be created</div>
+            )}*/}
           </div>
 
           {/* Prix vente + Prix achat + Stock */}
@@ -131,7 +175,9 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
               <input
                   style={styles.input}
                   type="number"
-                  placeholder="500"
+                  step="0.01"
+                  inputMode="decimal"
+                  placeholder="3.50"
                   value={price}
                   onChange={e => setPrice(e.target.value)}
               />
@@ -141,7 +187,9 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
               <input
                   style={styles.input}
                   type="number"
-                  placeholder="300"
+                  step="0.01"
+                  inputMode="decimal"
+                  placeholder="3.10"
                   value={cost}
                   onChange={e => setCost(e.target.value)}
               />
@@ -204,7 +252,9 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
             <div style={{ ...styles.previewEmoji, background: color + '22' }}>{emoji}</div>
             <div>
               <div style={styles.previewName}>{name || 'Product name'}</div>
-              <div style={styles.previewPrice}>{price ? parseInt(price).toLocaleString() + ' GH₵' : '— GH₵'}</div>
+              <div style={styles.previewPrice}>
+                {price ? parseFloat(price).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' GH₵' : '— GH₵'}
+              </div>
             </div>
           </div>
 

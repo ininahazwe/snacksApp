@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { formatPrice, round2 } from '../lib/format'
 
 export default function VentesView() {
   const [sales, setSales] = useState([])
@@ -69,14 +70,14 @@ export default function VentesView() {
     setProfitData({
       periodStart: dateStart,
       periodEnd: dateEnd,
-      totalRevenue,
-      totalCost,
-      profit,
+      totalRevenue: round2(totalRevenue),
+      totalCost: round2(totalCost),
+      profit: round2(profit),
       profitMargin,
-      cashRevenue,
-      creditRevenue,
+      cashRevenue: round2(cashRevenue),
+      creditRevenue: round2(creditRevenue),
       transactionCount,
-      avgProfit: transactionCount > 0 ? Math.round(profit / transactionCount) : 0,
+      avgProfit: transactionCount > 0 ? round2(profit / transactionCount) : 0,
     })
   }
 
@@ -135,7 +136,7 @@ export default function VentesView() {
             {filter === 'toutes' ? 'Total · All Sales' : filter === 'payees' ? 'Total · Paid' : 'Total · Credit'}
           </div>
           <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '32px', color: 'white', letterSpacing: '-0.5px' }}>
-            {filtered.reduce((sum, s) => sum + s.amount, 0).toLocaleString()} <span style={{ fontSize: '18px' }}>GH₵</span>
+            {formatPrice(filtered.reduce((sum, s) => sum + s.amount, 0))} <span style={{ fontSize: '18px' }}>GH₵</span>
           </div>
           <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginTop: '6px' }}>
             {filtered.length} transaction{filtered.length !== 1 ? 's' : ''}

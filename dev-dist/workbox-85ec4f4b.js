@@ -7,7 +7,7 @@ define(['exports'], (function (exports) { 'use strict';
 
     /*
       Copyright 2019 Google LLC
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -64,7 +64,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -337,7 +337,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -353,7 +353,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -386,7 +386,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -461,7 +461,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -486,7 +486,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -526,7 +526,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -584,7 +584,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -653,7 +653,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -667,7 +667,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -1082,7 +1082,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -1107,7 +1107,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -1141,7 +1141,7 @@ define(['exports'], (function (exports) { 'use strict';
               paramName: 'capture'
             });
           }
-          // We want to check if Express-style wildcards are in the pathname only.
+          // We want to check if Express-styles wildcards are in the pathname only.
           // TODO: Remove this log message in v4.
           const valueToCheck = capture.startsWith('http') ? captureUrl.pathname : capture;
           // See https://github.com/pillarjs/path-to-regexp#parameters
@@ -1185,7 +1185,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -1231,7 +1231,7 @@ define(['exports'], (function (exports) { 'use strict';
 
     /*
       Copyright 2019 Google LLC
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -1248,7 +1248,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -1260,7 +1260,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -1548,7 +1548,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -1732,7 +1732,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -1887,7 +1887,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -2136,7 +2136,7 @@ define(['exports'], (function (exports) { 'use strict';
 
     /*
       Copyright 2020 Google LLC
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -2182,7 +2182,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -2209,7 +2209,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -2237,7 +2237,7 @@ define(['exports'], (function (exports) { 'use strict';
 
     /*
       Copyright 2019 Google LLC
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -2261,7 +2261,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2020 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -2761,7 +2761,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2020 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -2992,7 +2992,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3010,7 +3010,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3092,7 +3092,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3181,7 +3181,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3209,7 +3209,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3412,7 +3412,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3428,7 +3428,7 @@ define(['exports'], (function (exports) { 'use strict';
 
     /*
       Copyright 2020 Google LLC
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3455,7 +3455,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3517,7 +3517,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2020 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3564,7 +3564,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2020 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3597,7 +3597,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3632,7 +3632,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3677,7 +3677,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3710,7 +3710,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3764,7 +3764,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2020 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -3974,7 +3974,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -4264,7 +4264,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -4283,7 +4283,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -4313,7 +4313,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -4361,7 +4361,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2020 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -4417,7 +4417,7 @@ define(['exports'], (function (exports) { 'use strict';
 
     /*
       Copyright 2019 Google LLC
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -4445,7 +4445,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -4476,7 +4476,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -4502,7 +4502,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -4537,7 +4537,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -4564,7 +4564,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2018 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */
@@ -4672,7 +4672,7 @@ define(['exports'], (function (exports) { 'use strict';
     /*
       Copyright 2019 Google LLC
 
-      Use of this source code is governed by an MIT-style
+      Use of this source code is governed by an MIT-styles
       license that can be found in the LICENSE file or at
       https://opensource.org/licenses/MIT.
     */

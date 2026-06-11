@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import EditProductModal from '../components/EditProductModal'
 
 export default function StocksView() {
   const [produits, setProduits] = useState([])
@@ -10,6 +11,7 @@ export default function StocksView() {
   const [saving, setSaving] = useState(false)
   const [filtre, setFiltre] = useState('all') // 'all' | 'low' | 'ok'
   const [expandedId, setExpandedId] = useState(null) // Quel produit est ouvert
+  const [produitAEditer, setProduitAEditer] = useState(null)
 
   useEffect(() => {
     fetchProduits()
@@ -171,6 +173,15 @@ export default function StocksView() {
                           </div>
                         </div>
 
+                        {/* Bouton édition produit */}
+                        <button
+                            onClick={(e) => { e.stopPropagation(); setProduitAEditer(p) }}
+                            style={s.addBatchBtn}
+                            title="Edit product"
+                        >
+                          ✏️
+                        </button>
+
                         {/* Bouton expand + add batch */}
                         <button
                             onClick={(e) => ouvrirAjoutBatch(p, e)}
@@ -267,6 +278,18 @@ export default function StocksView() {
                 )
               })}
             </div>
+        )}
+
+        {/* Modal édition produit */}
+        {produitAEditer && (
+            <EditProductModal
+                product={produitAEditer}
+                onClose={() => setProduitAEditer(null)}
+                onUpdated={(updated) => {
+                  setProduits(ps => ps.map(x => x.id === updated.id ? updated : x))
+                  setProduitAEditer(null)
+                }}
+            />
         )}
 
         {/* Modal ajout batch */}

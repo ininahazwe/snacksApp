@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
+import { formatPrice, round2 } from '../lib/format'
 
 export default function SaleModal({ product, onClose, onSuccess }) {
   const { user } = useAuth()
@@ -8,8 +9,12 @@ export default function SaleModal({ product, onClose, onSuccess }) {
   const [selectedClient, setSelectedClient] = useState(null)
   const [paymentType, setPaymentType] = useState('cash')
   const [clients, setClients] = useState([])
+  const [clientSearch, setClientSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [loadingClients, setLoadingClients] = useState(true)
+  const [cashReceived, setCashReceived] = useState('')
+  const [saveAsCredit, setSaveAsCredit] = useState(false)
+  const [useCredit, setUseCredit] = useState(false)
 
   useEffect(() => {
     fetchClients()
@@ -21,12 +26,30 @@ export default function SaleModal({ product, onClose, onSuccess }) {
     setLoadingClients(false)
   }
 
-  const total = product.price * qty
+  const total = round2(product.price * qty)
+
+ // Avoir disponible du client sélectionné
+  const clientCredit = selectedClient?.credit ?? 0
+  const appliedCredit = useCredit && clientCredit > 0 ? Math.min(round2(clientCredit), total) : 0
+  const amountDue = round2(total - appliedCredit)
+
+  const received = parseFloat(cashReceived) || 0
+  // La monnaie se calcule sur le reste à payer, pas sur le total
+  const changeDue = paymentType === 'cash' && received > amountDue ? round2(received - amountDue) : 0
+  // L'avoir nécessite un client identifié
+  const creditNeedsClient = saveAsCredit && changeDue > 0 && !selectedClient
+
+  // Filtrer les clients selon la recherche
+  const filteredClients = clients.filter(c =>
+      c.name.toLowerCase().includes(clientSearch.toLowerCase())
+  )
 
   const handleSubmit = async () => {
     setLoading(true)
     try {
       // 1. Récupérer le batch ACTIF (le plus ancien non épuisé) - FIFO
+      // Peut être absent (produit créé avec stock 0, batch épuisé sans réappro…)
+      // → dans ce cas la vente passe quand même, sans tracking de batch
       const { data: batches, error: batchError } = await supabase
           .from('stock_batches')
           .select('*')
@@ -36,13 +59,7 @@ export default function SaleModal({ product, onClose, onSuccess }) {
           .limit(1)
 
       if (batchError) throw batchError
-      const activeBatch = batches?.[0]
-
-      if (!activeBatch) {
-        alert('Aucun batch actif pour ce produit')
-        setLoading(false)
-        return
-      }
+      const activeBatch = batches?.[0] ?? null
 
       // 2. Enregistrer la vente
       const { error: saleError } = await supabase.from('sales').insert({
@@ -63,20 +80,20 @@ export default function SaleModal({ product, onClose, onSuccess }) {
           .eq('id', product.id)
       if (stockError) throw stockError
 
-      // 4. Enregistrer le mouvement de stock avec le batch_id
+      // 4. Enregistrer le mouvement de stock (batch_id null si aucun batch actif)
       const { error: movError } = await supabase.from('stock_movements').insert({
         product_id: product.id,
-        batch_id: activeBatch.id,
+        batch_id: activeBatch?.id ?? null,
         delta: -qty,
         reason: 'vente',
       })
       if (movError) console.error('Erreur mouvement:', movError)
 
-      // 5. Si le batch est maintenant épuisé (stock = 0), marquer exhausted_at + calculer duration_days
-      if (newStock <= 0) {
+      // 5. Si le batch est maintenant épuisé (stock = 0), marquer exhausted_at + duration_days
+      if (activeBatch && newStock <= 0) {
         const now = new Date()
-        const received = new Date(activeBatch.received_at)
-        const durationDays = Math.round((now - received) / (1000 * 60 * 60 * 24))
+        const receivedAt = new Date(activeBatch.received_at)
+        const durationDays = Math.round((now - receivedAt) / (1000 * 60 * 60 * 24))
 
         const { error: batchUpdateError } = await supabase
             .from('stock_batches')
@@ -92,14 +109,26 @@ export default function SaleModal({ product, onClose, onSuccess }) {
       if (paymentType === 'dette' && selectedClient) {
         await supabase
             .from('clients')
-            .update({ debt: (selectedClient.debt ?? 0) + total })
+            .update({ debt: round2((selectedClient.debt ?? 0) + amountDue) })
             .eq('id', selectedClient.id)
       }
 
-      onSuccess(`✓ Vente enregistrée — ${total.toLocaleString()} GH₵`)
+      // 7. Mettre à jour l'avoir du client : consommation + éventuel nouvel avoir (monnaie non rendue)
+      const newCreditFromChange = (paymentType === 'cash' && saveAsCredit && changeDue > 0) ? changeDue : 0
+      const creditDelta = round2(newCreditFromChange - appliedCredit)
+      if (selectedClient && creditDelta !== 0) {
+        await supabase
+            .from('clients')
+            .update({ credit: round2((selectedClient.credit ?? 0) + creditDelta) })
+            .eq('id', selectedClient.id)
+      }
+
+      const usedMsg = appliedCredit > 0 ? ` · Credit used −${formatPrice(appliedCredit)} GH₵` : ''
+      const newMsg = (newCreditFromChange > 0 && selectedClient) ? ` · Credit +${formatPrice(newCreditFromChange)} GH₵` : ''
+      onSuccess(`✓ Sale recorded — ${formatPrice(total)} GH₵${usedMsg}${newMsg}`)
     } catch (err) {
       console.error('Erreur vente:', err)
-      alert('Erreur lors de l\'enregistrement. Réessaie.')
+      alert('Error while saving. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -117,13 +146,13 @@ export default function SaleModal({ product, onClose, onSuccess }) {
             </div>
             <div>
               <div style={styles.productName}>{product.name}</div>
-              <div style={styles.productPrice}>{product.price.toLocaleString()} GH₵ · unité</div>
+              <div style={styles.productPrice}>{formatPrice(product.price)} GH₵ · per unit</div>
             </div>
           </div>
 
           {/* Quantité */}
           <div style={styles.fieldGroup}>
-            <div style={styles.fieldLabel}>Quantité</div>
+            <div style={styles.fieldLabel}>Quantity</div>
             <div style={styles.qtyControl}>
               <button style={styles.qtyBtn} onClick={() => setQty(q => Math.max(1, q - 1))}>−</button>
               <span style={styles.qtyValue}>{qty}</span>
@@ -135,43 +164,59 @@ export default function SaleModal({ product, onClose, onSuccess }) {
           <div style={styles.fieldGroup}>
             <div style={styles.fieldLabel}>Client</div>
             {loadingClients ? (
-                <div style={styles.loadingText}>Chargement…</div>
+                <div style={styles.loadingText}>Loading…</div>
             ) : (
-                <div style={styles.clientList}>
-                  {clients.map(c => (
-                      <div
-                          key={c.id}
-                          style={{
-                            ...styles.clientOption,
-                            borderColor: selectedClient?.id === c.id ? '#1A1A1A' : '#EBEBEB',
-                            background: selectedClient?.id === c.id ? '#FAFAFA' : 'white',
-                          }}
-                          onClick={() => setSelectedClient(selectedClient?.id === c.id ? null : c)}
-                      >
-                        <div style={{
-                          ...styles.checkCircle,
-                          background: selectedClient?.id === c.id ? '#1A1A1A' : 'transparent',
-                          borderColor: selectedClient?.id === c.id ? '#1A1A1A' : '#DDD',
-                        }}>
-                          {selectedClient?.id === c.id && (
-                              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5">
-                                <path d="M2 6l3 3 5-5" />
-                              </svg>
-                          )}
-                        </div>
-                        <span style={styles.clientOptionName}>{c.name}</span>
-                        {c.debt > 0 && (
-                            <span style={styles.debtBadge}>−{c.debt.toLocaleString()} GH₵</span>
-                        )}
-                      </div>
-                  ))}
-                </div>
+                <>
+                  {/* Recherche client */}
+                  <input
+                      style={{ ...styles.input, marginBottom: '8px' }}
+                      placeholder="Search clients…"
+                      value={clientSearch}
+                      onChange={e => setClientSearch(e.target.value)}
+                  />
+                  <div style={styles.clientList}>
+                    {filteredClients.length === 0 ? (
+                        <div style={styles.loadingText}>No client found</div>
+                    ) : (
+                        filteredClients.map(c => (
+                            <div
+                                key={c.id}
+                                style={{
+                                  ...styles.clientOption,
+                                  borderColor: selectedClient?.id === c.id ? '#1A1A1A' : '#EBEBEB',
+                                  background: selectedClient?.id === c.id ? '#FAFAFA' : 'white',
+                                }}
+                                onClick={() => { setSelectedClient(selectedClient?.id === c.id ? null : c); setUseCredit(false) }}
+                            >
+                              <div style={{
+                                ...styles.checkCircle,
+                                background: selectedClient?.id === c.id ? '#1A1A1A' : 'transparent',
+                                borderColor: selectedClient?.id === c.id ? '#1A1A1A' : '#DDD',
+                              }}>
+                                {selectedClient?.id === c.id && (
+                                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5">
+                                      <path d="M2 6l3 3 5-5" />
+                                    </svg>
+                                )}
+                              </div>
+                              <span style={styles.clientOptionName}>{c.name}</span>
+                              {c.debt > 0 && (
+                                  <span style={styles.debtBadge}>−{formatPrice(c.debt)} GH₵</span>
+                              )}
+                              {c.credit > 0 && (
+                                  <span style={styles.creditBadge}>+{formatPrice(c.credit)} GH₵</span>
+                              )}
+                            </div>
+                        ))
+                    )}
+                  </div>
+                </>
             )}
           </div>
 
           {/* Mode de paiement */}
           <div style={styles.fieldGroup}>
-            <div style={styles.fieldLabel}>Mode de paiement</div>
+            <div style={styles.fieldLabel}>Payment method</div>
             <div style={styles.paymentToggle}>
               <div
                   style={{
@@ -182,7 +227,7 @@ export default function SaleModal({ product, onClose, onSuccess }) {
                   onClick={() => setPaymentType('cash')}
               >
                 <div style={styles.paymentEmoji}>💵</div>
-                <div style={styles.paymentLabel}>Paiement direct</div>
+                <div style={styles.paymentLabel}>Cash payment</div>
               </div>
               <div
                   style={{
@@ -193,31 +238,125 @@ export default function SaleModal({ product, onClose, onSuccess }) {
                   onClick={() => setPaymentType('dette')}
               >
                 <div style={styles.paymentEmoji}>📋</div>
-                <div style={styles.paymentLabel}>Mettre en dette</div>
+                <div style={styles.paymentLabel}>On credit</div>
               </div>
             </div>
             {paymentType === 'dette' && !selectedClient && (
-                <div style={styles.warning}>⚠ Sélectionne un client pour enregistrer une dette</div>
+                <div style={styles.warning}>⚠ Select a client to record a credit sale</div>
             )}
           </div>
+
+          {/* Utiliser l'avoir du client */}
+          {selectedClient && clientCredit > 0 && (
+              <div style={styles.fieldGroup}>
+                <div style={styles.fieldLabel}>Store credit</div>
+                <div
+                    style={{
+                      ...styles.creditToggle,
+                      marginTop: 0,
+                      borderColor: useCredit ? '#2E7D42' : '#EBEBEB',
+                      background: useCredit ? '#F0FBF3' : 'white',
+                    }}
+                    onClick={() => setUseCredit(v => !v)}
+                >
+                  <div style={{
+                    ...styles.checkCircle,
+                    background: useCredit ? '#2E7D42' : 'transparent',
+                    borderColor: useCredit ? '#2E7D42' : '#DDD',
+                  }}>
+                    {useCredit && (
+                        <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5">
+                          <path d="M2 6l3 3 5-5" />
+                        </svg>
+                    )}
+                  </div>
+                  <span style={{ fontSize: '13px', fontWeight: '500', color: '#1A1A1A', flex: 1 }}>
+                    Apply store credit
+                  </span>
+                  <span style={styles.creditBadge}>{formatPrice(clientCredit)} GH₵ available</span>
+                </div>
+              </div>
+          )}
+
+          {/* Cash reçu + avoir */}
+          {paymentType === 'cash' && (
+              <div style={styles.fieldGroup}>
+                <div style={styles.fieldLabel}>Cash received (optional)</div>
+                <input
+                    style={styles.input}
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    placeholder={formatPrice(amountDue)}
+                    value={cashReceived}
+                    onChange={e => setCashReceived(e.target.value)}
+                />
+                {changeDue > 0 && (
+                    <>
+                      <div style={styles.changeRow}>
+                        Change due: <strong>{formatPrice(changeDue)} GH₵</strong>
+                      </div>
+                      <div
+                          style={{
+                            ...styles.creditToggle,
+                            borderColor: saveAsCredit ? '#2E7D42' : '#EBEBEB',
+                            background: saveAsCredit ? '#F0FBF3' : 'white',
+                          }}
+                          onClick={() => setSaveAsCredit(v => !v)}
+                      >
+                        <div style={{
+                          ...styles.checkCircle,
+                          background: saveAsCredit ? '#2E7D42' : 'transparent',
+                          borderColor: saveAsCredit ? '#2E7D42' : '#DDD',
+                        }}>
+                          {saveAsCredit && (
+                              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5">
+                                <path d="M2 6l3 3 5-5" />
+                              </svg>
+                          )}
+                        </div>
+                        <span style={{ fontSize: '13px', fontWeight: '500', color: '#1A1A1A' }}>
+                          No change available — save as store credit
+                        </span>
+                      </div>
+                      {creditNeedsClient && (
+                          <div style={styles.warning}>⚠ Select a client to save a store credit</div>
+                      )}
+                    </>
+                )}
+              </div>
+          )}
 
           {/* Total */}
           <div style={styles.totalLine}>
             <span style={styles.totalLabel}>Total</span>
-            <span style={styles.totalValue}>{total.toLocaleString()} GH₵</span>
+            <span style={styles.totalValue}>{formatPrice(total)} GH₵</span>
           </div>
+
+          {appliedCredit > 0 && (
+              <div style={styles.dueBreakdown}>
+                <div style={styles.dueRow}>
+                  <span>Store credit applied</span>
+                  <span style={{ color: '#2E7D42', fontWeight: '600' }}>−{formatPrice(appliedCredit)} GH₵</span>
+                </div>
+                <div style={styles.dueRow}>
+                  <span>To pay</span>
+                  <span style={{ color: '#1A1A1A', fontWeight: '600' }}>{formatPrice(amountDue)} GH₵</span>
+                </div>
+              </div>
+          )}
 
           {/* Bouton */}
           <button
               style={{
                 ...styles.submitBtn,
-                opacity: (loading || (paymentType === 'dette' && !selectedClient)) ? 0.5 : 1,
-                cursor: (loading || (paymentType === 'dette' && !selectedClient)) ? 'not-allowed' : 'pointer',
+                opacity: (loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient) ? 0.5 : 1,
+                cursor: (loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient) ? 'not-allowed' : 'pointer',
               }}
               onClick={handleSubmit}
-              disabled={loading || (paymentType === 'dette' && !selectedClient)}
+              disabled={loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient}
           >
-            {loading ? 'Enregistrement…' : 'Enregistrer la vente'}
+            {loading ? 'Saving…' : 'Record sale'}
           </button>
         </div>
       </div>
@@ -330,5 +469,34 @@ const styles = {
     fontFamily: "'DM Sans', sans-serif",
     fontSize: '15px', fontWeight: '500',
     transition: 'all 0.2s ease',
+  },
+  input: {
+    width: '100%', padding: '13px 16px',
+    borderRadius: '12px', border: '1.5px solid #EBEBEB',
+    fontSize: '15px', fontFamily: "'DM Sans', sans-serif",
+    color: '#1A1A1A', outline: 'none', boxSizing: 'border-box',
+  },
+  changeRow: {
+    fontSize: '13px', color: '#1A1A1A', marginTop: '10px',
+    padding: '10px 14px', background: '#F9F9F9', borderRadius: '10px',
+  },
+  creditToggle: {
+    display: 'flex', alignItems: 'center', gap: '10px',
+    padding: '12px 14px', borderRadius: '12px',
+    border: '1.5px solid #EBEBEB', cursor: 'pointer',
+    marginTop: '8px', transition: 'all 0.15s',
+  },
+  creditBadge: {
+    fontSize: '11px', fontWeight: '500',
+    background: '#E8F5EC', color: '#2E7D42',
+    padding: '2px 8px', borderRadius: '100px',
+  },
+  dueBreakdown: {
+    marginTop: '-12px', marginBottom: '20px',
+    background: '#F9F9F9', borderRadius: '12px', padding: '10px 14px',
+  },
+  dueRow: {
+    display: 'flex', justifyContent: 'space-between',
+    fontSize: '13px', color: '#999', padding: '3px 0',
   },
 }
