@@ -87,12 +87,17 @@ export default function StocksView() {
     }
   }
 
+  const [search, setSearch] = useState('')
+
   const filtres = {
     all: produits,
     low: produits.filter(p => p.stock < 10),
     ok: produits.filter(p => p.stock >= 10),
   }
-  const liste = filtres[filtre]
+
+  const liste = filtres[filtre].filter(p =>
+      p.name.toLowerCase().includes(search.toLowerCase())
+  )
 
   const stockBas = produits.filter(p => p.stock < 10).length
   const stockTotal = produits.reduce((sum, p) => sum + p.stock, 0)
@@ -130,6 +135,45 @@ export default function StocksView() {
               </button>
           ))}
         </div>
+
+        {/* Recherche nominative */}
+        {produits.length > 0 && (
+            <div style={{ position: 'relative', marginBottom: '16px' }}>
+              <div style={{
+                position: 'absolute', left: '14px', top: '50%',
+                transform: 'translateY(-50%)', pointerEvents: 'none',
+                color: '#CCC', fontSize: '15px', lineHeight: 1,
+              }}>
+                🔍
+              </div>
+              <input
+                  style={{
+                    width: '100%', padding: '11px 16px 11px 38px',
+                    borderRadius: '12px', border: '1.5px solid #EBEBEB',
+                    fontSize: '14px', fontFamily: "'DM Sans', sans-serif",
+                    color: '#1A1A1A', outline: 'none',
+                    boxSizing: 'border-box', background: 'white',
+                  }}
+                  placeholder="Search products…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+              />
+              {search && (
+                  <button
+                      onClick={() => setSearch('')}
+                      style={{
+                        position: 'absolute', right: '12px', top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'none', border: 'none',
+                        cursor: 'pointer', color: '#CCC',
+                        fontSize: '16px', lineHeight: 1, padding: '2px',
+                      }}
+                  >
+                    ✕
+                  </button>
+              )}
+            </div>
+        )}
 
         {/* Liste produits avec expandables */}
         {liste.length === 0 ? (
@@ -315,6 +359,7 @@ export default function StocksView() {
                       placeholder="Ex: 100"
                       value={nouvelleQte}
                       onChange={e => setNouvelleQte(e.target.value)}
+                      onClick={e => e.stopPropagation()}
                       autoFocus
                   />
                   {nouvelleQte && parseInt(nouvelleQte) > 0 && (
@@ -326,13 +371,19 @@ export default function StocksView() {
 
                 <div style={s.shortcutRow}>
                   {[50, 100, 150, 200].map(n => (
-                      <button key={n} style={s.shortcut} onClick={() => setNouvelleQte(String(n))}>+{n}</button>
+                      <button
+                          key={n}
+                          style={s.shortcut}
+                          onClick={e => { e.stopPropagation(); setNouvelleQte(String(n)) }}
+                      >
+                        +{n}
+                      </button>
                   ))}
                 </div>
 
                 <button
                     style={{ ...s.submitBtn, opacity: (!nouvelleQte || saving) ? 0.5 : 1 }}
-                    onClick={enregistrerBatch}
+                    onClick={e => { e.stopPropagation(); enregistrerBatch() }}
                     disabled={!nouvelleQte || saving}
                 >
                   {saving ? 'Saving…' : 'Register batch'}
@@ -375,7 +426,13 @@ const s = {
   timelineBar: { height: '3px', background: '#F0F0F0', borderRadius: '10px', overflow: 'hidden' },
   timelineFill: { height: '100%', borderRadius: '10px' },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' },
-  modal: { background: 'white', borderRadius: '28px 28px 0 0', padding: '8px 24px 40px', width: '100%', maxWidth: '430px', fontFamily: "'DM Sans', sans-serif" },
+  modal: {
+    background: 'white', borderRadius: '28px 28px 0 0',
+    padding: '8px 24px 40px',
+    width: '100%', maxWidth: '430px',
+    maxHeight: '85vh', overflowY: 'auto', // ← manquait
+    fontFamily: "'DM Sans', sans-serif",
+  },
   handle: { width: '36px', height: '4px', background: '#E0E0E0', borderRadius: '10px', margin: '10px auto 20px' },
   modalHeader: { display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '24px' },
   modalNom: { fontFamily: "'DM Serif Display', serif", fontSize: '20px', color: '#1A1A1A' },
