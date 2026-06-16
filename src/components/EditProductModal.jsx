@@ -1,318 +1,290 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { formatPrice } from '../lib/format'
 
-const EMOJIS = ['🍬', '🍫', '🍭', '🍡', '🍩', '🧁', '🍪', '🍓', '🍋', '🥭', '🍑', '🍇']
-const COLORS = ['#F5C842', '#E84B6E', '#5BAD72', '#C4A8E0', '#8B5E3C', '#F4845F', '#4ECDC4', '#2D2D2D']
+/**
+ * EditProductModal
+ * Utilisé par StocksView (ajout batch) ET ProduitsView (via long-press ou bouton dédié).
+ *
+ * Props :
+ *   product    – objet produit complet
+ *   onClose    – fermer sans changement
+ *   onUpdated  – (updatedProduct) => void  appelé après modif stock
+ *   onDeleted  – (productId) => void       appelé après suppression (optionnel)
+ */
+export default function EditProductModal({ product, onClose, onUpdated, onDeleted }) {
+    // ── Ajout batch (usage StocksView) ──────────────────────────────────────────
+    const [nouvelleQte, setNouvelleQte] = useState('')
+    const [savingBatch, setSavingBatch] = useState(false)
 
-export default function EditProductModal({ product, onClose, onUpdated }) {
-    // Champs pré-remplis avec les valeurs actuelles du produit
-    const [name, setName] = useState(product.name ?? '')
-    const [price, setPrice] = useState(product.price != null ? String(product.price) : '')
-    const [cost, setCost] = useState(product.cost != null && product.cost !== 0 ? String(product.cost) : '')
-    const [category, setCategory] = useState(product.category ?? 'Autre')
-    const [emoji, setEmoji] = useState(product.emoji ?? '🍬')
-    const [color, setColor] = useState(product.color ?? '#F5C842')
-    const [loading, setLoading] = useState(false)
+    // ── Ajustement stock direct ──────────────────────────────────────────────────
+    const [stockValue, setStockValue] = useState(String(product.stock))
+    const [savingStock, setSavingStock] = useState(false)
 
-    // Autocomplete catégories
-    const [allCategories, setAllCategories] = useState([])
-    const [showCatSuggestions, setShowCatSuggestions] = useState(false)
+    // ── Suppression ──────────────────────────────────────────────────────────────
+    const [nbVentes, setNbVentes] = useState(null)
+    const [loadingVentes, setLoadingVentes] = useState(true)
+    const [confirmDelete, setConfirmDelete] = useState(false)
+    const [deleting, setDeleting] = useState(false)
+
+    // ── Toast ────────────────────────────────────────────────────────────────────
+    const [toast, setToast] = useState(null) // { msg, type: 'success'|'danger' }
 
     useEffect(() => {
-        fetchCategories()
-    }, [])
+        supabase
+            .from('sales')
+            .select('id', { count: 'exact', head: true })
+            .eq('product_id', product.id)
+            .then(({ count }) => {
+                setNbVentes(count ?? 0)
+                setLoadingVentes(false)
+            })
+    }, [product.id])
 
-    const fetchCategories = async () => {
-        const { data } = await supabase.from('products').select('category')
-        if (data) {
-            const cats = Array.from(new Set(data.map(p => p.category || 'Autre'))).sort()
-            setAllCategories(cats)
-        }
+    const afficherToast = (msg, type = 'success') => {
+        setToast({ msg, type })
+        setTimeout(() => setToast(null), 2500)
     }
 
-    // Suggestions : catégories existantes qui matchent la saisie
-    const catSuggestions = allCategories.filter(c =>
-        c.toLowerCase().includes(category.toLowerCase()) &&
-        c.toLowerCase() !== category.toLowerCase()
-    )
-    const isNewCategory = category.trim() &&
-        !allCategories.some(c => c.toLowerCase() === category.trim().toLowerCase())
-
-    // Détecter si quelque chose a changé (pour désactiver le bouton sinon)
-    const hasChanges =
-        name.trim() !== product.name ||
-        parseFloat(price) !== product.price ||
-        (parseFloat(cost) || 0) !== (product.cost ?? 0) ||
-        category.trim() !== (product.category ?? 'Autre') ||
-        emoji !== (product.emoji ?? '🍬') ||
-        color !== (product.color ?? '#F5C842')
-
-    const handleSubmit = async () => {
-        if (!name || !price) return
-        setLoading(true)
+    // ── Enregistrer un batch de réception ───────────────────────────────────────
+    const enregistrerBatch = async () => {
+        const qty = parseInt(nouvelleQte)
+        if (!qty || qty <= 0) return
+        setSavingBatch(true)
         try {
-            const { data, error } = await supabase
-                .from('products')
-                .update({
-                    name: name.trim(),
-                    price: parseFloat(price),
-                    cost: parseFloat(cost) || 0,
-                    category: category.trim() || 'Autre',
-                    emoji,
-                    color,
+            const { data: newBatch, error: batchError } = await supabase
+                .from('stock_batches')
+                .insert({
+                    product_id: product.id,
+                    received_qty: qty,
+                    received_at: new Date().toISOString(),
                 })
-                .eq('id', product.id)
                 .select()
                 .single()
+            if (batchError) throw batchError
 
-            if (error) throw error
-            onUpdated(data)
+            const nouveauStock = product.stock + qty
+            const { error: stockError } = await supabase
+                .from('products')
+                .update({ stock: nouveauStock })
+                .eq('id', product.id)
+            if (stockError) throw stockError
+
+            await supabase.from('stock_movements').insert({
+                product_id: product.id,
+                batch_id: newBatch.id,
+                delta: qty,
+                reason: 'reception_carton',
+            })
+
+            afficherToast(`+${qty} units added ✓`)
+            setNouvelleQte('')
+            onUpdated({ ...product, stock: nouveauStock })
         } catch (err) {
-            console.error('Erreur mise à jour produit:', err)
-            alert('Erreur lors de la mise à jour du produit.')
+            console.error(err)
+            afficherToast('Error saving batch', 'danger')
         } finally {
-            setLoading(false)
+            setSavingBatch(false)
         }
     }
 
+    // ── Ajuster le stock directement ────────────────────────────────────────────
+    const ajusterStock = async () => {
+        const nouveau = parseInt(stockValue, 10)
+        if (isNaN(nouveau) || nouveau < 0 || nouveau === product.stock) return
+        setSavingStock(true)
+        const delta = nouveau - product.stock
+        const { error } = await supabase
+            .from('products')
+            .update({ stock: nouveau })
+            .eq('id', product.id)
+        if (!error) {
+            await supabase.from('stock_movements').insert({
+                product_id: product.id,
+                delta,
+                reason: 'Manual adjustment',
+            })
+            afficherToast('Stock updated ✓')
+            onUpdated({ ...product, stock: nouveau })
+        } else {
+            afficherToast('Error updating stock', 'danger')
+        }
+        setSavingStock(false)
+    }
+
+    // ── Supprimer le produit ─────────────────────────────────────────────────────
+    const supprimerProduit = async () => {
+        setDeleting(true)
+        const { error } = await supabase
+            .from('products')
+            .delete()
+            .eq('id', product.id)
+        if (!error) {
+            afficherToast('Product deleted', 'danger')
+            setTimeout(() => {
+                onDeleted?.(product.id)
+                onClose()
+            }, 1400)
+        } else {
+            afficherToast('Error deleting product', 'danger')
+            setDeleting(false)
+        }
+    }
+
+    const stockModifie = parseInt(stockValue, 10) !== product.stock && !isNaN(parseInt(stockValue, 10))
+
     return (
-        <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-            <div style={styles.modal}>
-                <div style={styles.handle} />
+        <div style={s.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+            <div style={s.modal}>
+                <div style={s.handle} />
 
-                <div style={styles.header}>
-                    <div>
-                        <div style={styles.title}>Edit product</div>
-                        {product.barcode && <div style={styles.barcode}>Barcode: {product.barcode}</div>}
+                {/* Toast */}
+                {toast && (
+                    <div style={{
+                        background: toast.type === 'danger' ? '#CC3333' : '#2E7D42',
+                        color: 'white', borderRadius: '12px', padding: '11px 16px',
+                        fontSize: '13.5px', fontWeight: '500', marginBottom: '16px',
+                        textAlign: 'center', fontFamily: "'DM Sans', sans-serif",
+                    }}>
+                        {toast.msg}
                     </div>
-                    <button style={styles.cancelBtn} onClick={onClose}>Cancel</button>
+                )}
+
+                {/* En-tête */}
+                <div style={s.modalHeader}>
+                    <div style={{ ...s.prodEmoji, background: (product.color ?? '#EEE') + '22' }}>
+                        {product.emoji ?? '🍬'}
+                    </div>
+                    <div>
+                        <div style={s.modalNom}>{product.name}</div>
+                        <div style={s.modalStock}>
+                            {formatPrice(product.price)} GH₵ · <strong>{product.stock}</strong> in stock
+                        </div>
+                    </div>
                 </div>
 
-                {/* Note : le stock ne s'édite pas ici — il se gère via les batchs */}
-                <div style={styles.stockNote}>
-                    📦 Current stock: <strong>{product.stock}</strong> units — managed via batches
-                </div>
-
-                {/* Nom */}
-                <div style={styles.fieldGroup}>
-                    <div style={styles.fieldLabel}>Name *</div>
+                {/* ── Section 1 : ajout batch ── */}
+                <div style={s.section}>
+                    <div style={s.fieldLabel}>Receive a new box</div>
                     <input
-                        style={styles.input}
-                        placeholder="Ex : Caramel Fleur de Sel"
-                        value={name}
-                        onChange={e => setName(e.target.value)}
+                        style={s.input}
+                        type="number"
+                        inputMode="numeric"
+                        placeholder="Ex: 100"
+                        value={nouvelleQte}
+                        onChange={e => setNouvelleQte(e.target.value)}
+                        onClick={e => e.stopPropagation()}
+                        autoFocus
                     />
-                </div>
-
-                {/* Catégorie avec autocomplete */}
-                <div style={{ ...styles.fieldGroup, position: 'relative' }}>
-                    <div style={styles.fieldLabel}>Category</div>
-                    <input
-                        style={styles.input}
-                        placeholder="Ex : Bonbons, Chocolats, Caramels, etc."
-                        value={category}
-                        onChange={e => { setCategory(e.target.value); setShowCatSuggestions(true) }}
-                        onFocus={() => setShowCatSuggestions(true)}
-                        onBlur={() => setShowCatSuggestions(false)}
-                    />
-                    {showCatSuggestions && catSuggestions.length > 0 && (
-                        <div style={styles.catDropdown}>
-                            {catSuggestions.map(c => (
-                                <div
-                                    key={c}
-                                    style={styles.catOption}
-                                    // onMouseDown (pas onClick) : se déclenche AVANT le blur de l'input
-                                    onMouseDown={e => { e.preventDefault(); setCategory(c); setShowCatSuggestions(false) }}
-                                >
-                                    {c}
-                                </div>
-                            ))}
+                    {nouvelleQte && parseInt(nouvelleQte) > 0 && (
+                        <div style={s.preview}>
+                            New total: <strong>{product.stock + parseInt(nouvelleQte)} units</strong>
                         </div>
                     )}
-                    {isNewCategory && (
-                        <div style={styles.catNewHint}>✨ New category "{category.trim()}" will be created</div>
-                    )}
-                </div>
-
-                {/* Prix vente + Prix achat */}
-                <div style={{ display: 'flex', gap: '12px' }}>
-                    <div style={{ ...styles.fieldGroup, flex: 1 }}>
-                        <div style={styles.fieldLabel}>Selling price (GH₵) *</div>
-                        <input
-                            style={styles.input}
-                            type="number"
-                            step="0.01"
-                            inputMode="decimal"
-                            placeholder="3.50"
-                            value={price}
-                            onChange={e => setPrice(e.target.value)}
-                        />
-                    </div>
-                    <div style={{ ...styles.fieldGroup, flex: 1 }}>
-                        <div style={styles.fieldLabel}>Buying price (GH₵)</div>
-                        <input
-                            style={styles.input}
-                            type="number"
-                            step="0.01"
-                            inputMode="decimal"
-                            placeholder="3.10"
-                            value={cost}
-                            onChange={e => setCost(e.target.value)}
-                        />
-                    </div>
-                </div>
-
-                {/* Emoji */}
-                <div style={styles.fieldGroup}>
-                    <div style={styles.fieldLabel}>Icon</div>
-                    <div style={styles.emojiGrid}>
-                        {EMOJIS.map(e => (
+                    <div style={s.shortcutRow}>
+                        {[50, 100, 150, 200].map(n => (
                             <button
-                                key={e}
-                                style={{
-                                    ...styles.emojiBtn,
-                                    background: emoji === e ? '#1A1A1A' : '#F5F5F5',
-                                    transform: emoji === e ? 'scale(1.15)' : 'scale(1)',
-                                }}
-                                onClick={() => setEmoji(e)}
+                                key={n}
+                                style={s.shortcut}
+                                onClick={e => { e.stopPropagation(); setNouvelleQte(String(n)) }}
                             >
-                                {e}
+                                +{n}
                             </button>
                         ))}
                     </div>
+                    <button
+                        style={{ ...s.submitBtn, opacity: (!nouvelleQte || parseInt(nouvelleQte) <= 0 || savingBatch) ? 0.4 : 1 }}
+                        onClick={e => { e.stopPropagation(); enregistrerBatch() }}
+                        disabled={!nouvelleQte || parseInt(nouvelleQte) <= 0 || savingBatch}
+                    >
+                        {savingBatch ? 'Saving…' : 'Register batch'}
+                    </button>
                 </div>
 
-                {/* Couleur */}
-                <div style={styles.fieldGroup}>
-                    <div style={styles.fieldLabel}>Colour</div>
-                    <div style={styles.colorGrid}>
-                        {COLORS.map(c => (
-                            <button
-                                key={c}
-                                style={{
-                                    ...styles.colorBtn,
-                                    background: c,
-                                    border: color === c ? '2.5px solid #1A1A1A' : '2.5px solid transparent',
-                                    transform: color === c ? 'scale(1.2)' : 'scale(1)',
-                                }}
-                                onClick={() => setColor(c)}
-                            />
-                        ))}
+                {/* ── Section 2 : ajustement stock direct ── */}
+                <div style={{ ...s.section, borderTop: '1px solid #F0F0F0', paddingTop: '20px' }}>
+                    <div style={s.fieldLabel}>Adjust current stock</div>
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
+                        <button
+                            style={s.stepBtn}
+                            onClick={() => setStockValue(v => String(Math.max(0, parseInt(v || '0', 10) - 1)))}
+                        >−</button>
+                        <input
+                            style={{ ...s.input, flex: 1, fontSize: '20px', fontFamily: "'DM Serif Display', serif", textAlign: 'center', marginBottom: 0 }}
+                            type="number"
+                            inputMode="numeric"
+                            min="0"
+                            value={stockValue}
+                            onChange={e => setStockValue(e.target.value)}
+                        />
+                        <button
+                            style={s.stepBtn}
+                            onClick={() => setStockValue(v => String(parseInt(v || '0', 10) + 1))}
+                        >+</button>
                     </div>
+                    <button
+                        style={{ ...s.submitBtn, background: '#555', opacity: (!stockModifie || savingStock) ? 0.4 : 1 }}
+                        onClick={ajusterStock}
+                        disabled={!stockModifie || savingStock}
+                    >
+                        {savingStock ? 'Saving…' : 'Update stock'}
+                    </button>
                 </div>
 
-                {/* Aperçu */}
-                <div style={styles.preview}>
-                    <div style={{ ...styles.previewEmoji, background: color + '22' }}>{emoji}</div>
-                    <div>
-                        <div style={styles.previewName}>{name || 'Product name'}</div>
-                        <div style={styles.previewPrice}>
-                            {price ? parseFloat(price).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' GH₵' : '— GH₵'}
+                {/* ── Section 3 : suppression ── */}
+                <div style={{ borderTop: '1px solid #F0F0F0', paddingTop: '20px', marginTop: '4px' }}>
+                    {loadingVentes ? (
+                        <div style={{ fontSize: '12px', color: '#CCC', textAlign: 'center' }}>Checking sales…</div>
+                    ) : nbVentes > 0 ? (
+                        <div style={{ fontSize: '12px', color: '#BBB', textAlign: 'center', padding: '4px 0' }}>
+                            {nbVentes} sale{nbVentes > 1 ? 's' : ''} recorded — this product cannot be deleted.
                         </div>
-                    </div>
+                    ) : !confirmDelete ? (
+                        <button style={s.deleteBtn} onClick={() => setConfirmDelete(true)}>
+                            🗑 Delete product
+                        </button>
+                    ) : (
+                        <div style={s.confirmBox}>
+                            <div style={s.confirmText}>
+                                Delete <strong>{product.name}</strong>? This cannot be undone.
+                            </div>
+                            <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
+                                <button style={s.confirmCancelBtn} onClick={() => setConfirmDelete(false)}>Cancel</button>
+                                <button
+                                    style={{ ...s.confirmDeleteBtn, opacity: deleting ? 0.5 : 1 }}
+                                    onClick={supprimerProduit}
+                                    disabled={deleting}
+                                >
+                                    {deleting ? 'Deleting…' : 'Yes, delete'}
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
-
-                <button
-                    style={{
-                        ...styles.submitBtn,
-                        opacity: (!name || !price || loading || !hasChanges) ? 0.5 : 1,
-                    }}
-                    onClick={handleSubmit}
-                    disabled={!name || !price || loading || !hasChanges}
-                >
-                    {loading ? 'Saving…' : 'Save changes'}
-                </button>
             </div>
         </div>
     )
 }
 
-const styles = {
-    overlay: {
-        position: 'fixed', inset: 0,
-        background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)',
-        zIndex: 200, display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-        animation: 'overlayIn 0.2s ease',
-    },
-    modal: {
-        background: 'white', borderRadius: '28px 28px 0 0',
-        padding: '8px 24px 40px',
-        width: '100%', maxWidth: '430px',
-        maxHeight: '92vh', overflowY: 'auto',
-        fontFamily: "'DM Sans', sans-serif",
-        animation: 'modalUp 0.3s cubic-bezier(0.34,1.56,0.64,1)',
-    },
-    handle: {
-        width: '36px', height: '4px', background: '#E0E0E0',
-        borderRadius: '10px', margin: '10px auto 20px',
-    },
-    header: { marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
-    title: {
-        fontFamily: "'DM Serif Display', serif",
-        fontSize: '20px', color: '#1A1A1A',
-    },
-    barcode: { fontSize: '12px', color: '#BBB', marginTop: '4px', fontFamily: 'monospace' },
-    cancelBtn: {
-        background: 'none', border: 'none', fontSize: '14px', fontWeight: '500',
-        color: '#999', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
-        padding: '4px 0', flexShrink: 0,
-    },
-    stockNote: {
-        fontSize: '13px', color: '#999', background: '#F9F9F9',
-        borderRadius: '10px', padding: '10px 14px', marginBottom: '16px',
-    },
-    fieldGroup: { marginBottom: '16px' },
-    fieldLabel: {
-        fontSize: '11.5px', fontWeight: '600', color: '#999',
-        textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '8px',
-    },
-    input: {
-        width: '100%', padding: '13px 16px',
-        borderRadius: '12px', border: '1.5px solid #EBEBEB',
-        fontSize: '15px', fontFamily: "'DM Sans', sans-serif",
-        color: '#1A1A1A', outline: 'none', boxSizing: 'border-box',
-    },
-    catDropdown: {
-        position: 'absolute', top: '100%', left: 0, right: 0,
-        background: 'white', borderRadius: '12px',
-        border: '1.5px solid #EBEBEB',
-        boxShadow: '0 8px 24px rgba(0,0,0,0.1)',
-        zIndex: 10, marginTop: '4px',
-        maxHeight: '160px', overflowY: 'auto',
-    },
-    catOption: {
-        padding: '11px 16px', fontSize: '14px', color: '#1A1A1A',
-        cursor: 'pointer', borderBottom: '1px solid rgba(0,0,0,0.04)',
-    },
-    catNewHint: {
-        fontSize: '12px', color: '#2E7D42', marginTop: '6px',
-        padding: '6px 10px', background: '#F0FBF3', borderRadius: '8px',
-    },
-    emojiGrid: { display: 'flex', flexWrap: 'wrap', gap: '8px' },
-    emojiBtn: {
-        width: '40px', height: '40px', border: 'none', borderRadius: '10px',
-        fontSize: '20px', cursor: 'pointer', transition: 'all 0.15s',
-    },
-    colorGrid: { display: 'flex', gap: '10px', flexWrap: 'wrap' },
-    colorBtn: {
-        width: '28px', height: '28px', borderRadius: '50%',
-        cursor: 'pointer', transition: 'all 0.15s',
-    },
-    preview: {
-        display: 'flex', alignItems: 'center', gap: '14px',
-        background: '#F9F9F9', borderRadius: '16px',
-        padding: '14px', marginBottom: '20px',
-    },
-    previewEmoji: {
-        width: '48px', height: '48px', borderRadius: '14px',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: '24px', flexShrink: 0,
-    },
-    previewName: { fontWeight: '500', fontSize: '15px', color: '#1A1A1A' },
-    previewPrice: { fontSize: '13px', color: '#999', marginTop: '2px' },
-    submitBtn: {
-        width: '100%', padding: '16px', background: '#1A1A1A', color: 'white',
-        border: 'none', borderRadius: '16px', fontFamily: "'DM Sans', sans-serif",
-        fontSize: '15px', fontWeight: '500', cursor: 'pointer',
-    },
+const s = {
+    overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' },
+    modal: { background: 'white', borderRadius: '28px 28px 0 0', padding: '8px 24px 48px', width: '100%', maxWidth: '430px', maxHeight: '90vh', overflowY: 'auto', fontFamily: "'DM Sans', sans-serif" },
+    handle: { width: '36px', height: '4px', background: '#E0E0E0', borderRadius: '10px', margin: '10px auto 20px' },
+    modalHeader: { display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '20px' },
+    prodEmoji: { width: '52px', height: '52px', borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px', flexShrink: 0 },
+    modalNom: { fontFamily: "'DM Serif Display', serif", fontSize: '20px', color: '#1A1A1A' },
+    modalStock: { fontSize: '13px', color: '#999', marginTop: '2px' },
+    section: { marginBottom: '20px' },
+    fieldLabel: { fontSize: '11.5px', fontWeight: '600', color: '#999', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '10px' },
+    input: { width: '100%', padding: '13px 16px', borderRadius: '12px', border: '1.5px solid #EBEBEB', fontSize: '15px', fontFamily: "'DM Sans', sans-serif", color: '#1A1A1A', outline: 'none', boxSizing: 'border-box', marginBottom: '8px' },
+    preview: { fontSize: '13px', color: '#999', marginBottom: '12px', padding: '8px 12px', background: '#F9F9F9', borderRadius: '8px' },
+    shortcutRow: { display: 'flex', gap: '8px', marginBottom: '12px' },
+    shortcut: { flex: 1, padding: '10px', background: '#F5F5F5', border: 'none', borderRadius: '10px', fontSize: '13px', fontWeight: '500', color: '#1A1A1A', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+    submitBtn: { width: '100%', padding: '15px', background: '#1A1A1A', color: 'white', border: 'none', borderRadius: '16px', fontFamily: "'DM Sans', sans-serif", fontSize: '15px', fontWeight: '500', cursor: 'pointer' },
+    stepBtn: { width: '50px', height: '50px', background: '#F5F5F5', border: 'none', borderRadius: '12px', fontSize: '22px', color: '#1A1A1A', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'DM Sans', sans-serif", flexShrink: 0 },
+    deleteBtn: { width: '100%', padding: '13px', background: 'none', border: '1.5px solid #FFE5E5', borderRadius: '14px', color: '#CC3333', fontSize: '13px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+    confirmBox: { background: '#FFF5F5', borderRadius: '14px', padding: '16px' },
+    confirmText: { fontSize: '13.5px', color: '#1A1A1A', lineHeight: 1.5 },
+    confirmCancelBtn: { flex: 1, padding: '11px', background: '#F0F0F0', border: 'none', borderRadius: '12px', fontSize: '13px', fontWeight: '500', color: '#666', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+    confirmDeleteBtn: { flex: 1, padding: '11px', background: '#CC3333', border: 'none', borderRadius: '12px', fontSize: '13px', fontWeight: '500', color: 'white', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
 }

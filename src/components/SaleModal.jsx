@@ -28,7 +28,7 @@ export default function SaleModal({ product, onClose, onSuccess }) {
 
   const total = round2(product.price * qty)
 
- // Avoir disponible du client sélectionné
+  // Avoir disponible du client sélectionné
   const clientCredit = selectedClient?.credit ?? 0
   const appliedCredit = useCredit && clientCredit > 0 ? Math.min(round2(clientCredit), total) : 0
   const amountDue = round2(total - appliedCredit)
@@ -39,6 +39,9 @@ export default function SaleModal({ product, onClose, onSuccess }) {
   // L'avoir nécessite un client identifié
   const creditNeedsClient = saveAsCredit && changeDue > 0 && !selectedClient
 
+  // NOUVEAU : Vérification si le cash reçu est insuffisant (uniquement si le champ n'est pas vide)
+  const cashReceivedIsInsufficient = paymentType === 'cash' && cashReceived !== '' && received < amountDue
+
   // Filtrer les clients selon la recherche
   const filteredClients = clients.filter(c =>
       c.name.toLowerCase().includes(clientSearch.toLowerCase())
@@ -48,11 +51,13 @@ export default function SaleModal({ product, onClose, onSuccess }) {
     setLoading(true)
     try {
       // 1. Récupérer le batch ACTIF (le plus ancien non épuisé) - FIFO
-      // Peut être absent (produit créé avec stock 0, batch épuisé sans réappro…)
-      // → dans ce cas la vente passe quand même, sans tracking de batch
+      // On récupère aussi ses mouvements pour calculer dynamiquement son stock restant réel
       const { data: batches, error: batchError } = await supabase
           .from('stock_batches')
-          .select('*')
+          .select(`
+            *,
+            stock_movements (delta)
+          `)
           .eq('product_id', product.id)
           .is('exhausted_at', null)
           .order('received_at', { ascending: true })
@@ -72,7 +77,7 @@ export default function SaleModal({ product, onClose, onSuccess }) {
       })
       if (saleError) throw saleError
 
-      // 3. Décrémenter le stock du produit
+      // 3. Décrémenter le stock global du produit
       const newStock = product.stock - qty
       const { error: stockError } = await supabase
           .from('products')
@@ -89,20 +94,27 @@ export default function SaleModal({ product, onClose, onSuccess }) {
       })
       if (movError) console.error('Erreur mouvement:', movError)
 
-      // 5. Si le batch est maintenant épuisé (stock = 0), marquer exhausted_at + duration_days
-      if (activeBatch && newStock <= 0) {
-        const now = new Date()
-        const receivedAt = new Date(activeBatch.received_at)
-        const durationDays = Math.round((now - receivedAt) / (1000 * 60 * 60 * 24))
+      // 5. Si le BATCH SPÉCIFIQUE est maintenant épuisé, marquer exhausted_at + duration_days
+      if (activeBatch) {
+        // Somme des deltas passés sur ce lot précis
+        const pastDeltasSum = activeBatch.stock_movements?.reduce((sum, mov) => sum + mov.delta, 0) || 0
+        // Stock restant dans ce lot APRÈS la vente actuelle
+        const batchRemainingStock = activeBatch.received_qty + pastDeltasSum - qty
 
-        const { error: batchUpdateError } = await supabase
-            .from('stock_batches')
-            .update({
-              exhausted_at: now.toISOString(),
-              duration_days: durationDays,
-            })
-            .eq('id', activeBatch.id)
-        if (batchUpdateError) console.error('Erreur update batch:', batchUpdateError)
+        if (batchRemainingStock <= 0) {
+          const now = new Date()
+          const receivedAt = new Date(activeBatch.received_at)
+          const durationDays = Math.round((now - receivedAt) / (1000 * 60 * 60 * 24))
+
+          const { error: batchUpdateError } = await supabase
+              .from('stock_batches')
+              .update({
+                exhausted_at: now.toISOString(),
+                duration_days: durationDays,
+              })
+              .eq('id', activeBatch.id)
+          if (batchUpdateError) console.error('Erreur update batch:', batchUpdateError)
+        }
       }
 
       // 6. Si dette, incrémenter la dette du client
@@ -291,6 +303,14 @@ export default function SaleModal({ product, onClose, onSuccess }) {
                     value={cashReceived}
                     onChange={e => setCashReceived(e.target.value)}
                 />
+
+                {/* NOUVEAU : Message d'erreur si le montant est insuffisant */}
+                {cashReceivedIsInsufficient && (
+                    <div style={styles.warning}>
+                      ⚠ The amount received is less than the total due. Please correct the amount or select "On credit" payment method.
+                    </div>
+                )}
+
                 {changeDue > 0 && (
                     <>
                       <div style={styles.changeRow}>
@@ -346,15 +366,15 @@ export default function SaleModal({ product, onClose, onSuccess }) {
               </div>
           )}
 
-          {/* Bouton */}
+          {/* Bouton de soumission mis à jour avec le blocage si montant insuffisant */}
           <button
               style={{
                 ...styles.submitBtn,
-                opacity: (loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient) ? 0.5 : 1,
-                cursor: (loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient) ? 'not-allowed' : 'pointer',
+                opacity: (loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient) ? 0.5 : 1,
+                cursor: (loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient) ? 'not-allowed' : 'pointer',
               }}
               onClick={handleSubmit}
-              disabled={loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient}
+              disabled={loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient}
           >
             {loading ? 'Saving…' : 'Record sale'}
           </button>

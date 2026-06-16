@@ -15,13 +15,25 @@ export default function ClientsView() {
   const [nouveauTel, setNouveauTel] = useState('')
   const [savingClient, setSavingClient] = useState(false)
 
+  // Recherche
+  const [searchClient, setSearchClient] = useState('')
+
+  // Edition nom
+  const [editingNom, setEditingNom] = useState(false)
+  const [editNomValue, setEditNomValue] = useState('')
+  const [savingNom, setSavingNom] = useState(false)
+
+  // Suppression
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
   useEffect(() => { fetchClients() }, [])
 
   const fetchClients = async () => {
     const { data } = await supabase
-      .from('clients')
-      .select('*')
-      .order('name')
+        .from('clients')
+        .select('*')
+        .order('name')
     setClients(data ?? [])
     setLoading(false)
   }
@@ -29,15 +41,23 @@ export default function ClientsView() {
   const ouvrirClient = async (client) => {
     setSelectedClient(client)
     setMontantRemboursement('')
+    setEditingNom(false)
+    setConfirmDelete(false)
     setLoadingHistorique(true)
     const { data } = await supabase
-      .from('sales')
-      .select('*, products(name, emoji)')
-      .eq('client_id', client.id)
-      .order('created_at', { ascending: false })
-      .limit(20)
+        .from('sales')
+        .select('*, products(name, emoji)')
+        .eq('client_id', client.id)
+        .order('created_at', { ascending: false })
+        .limit(20)
     setHistorique(data ?? [])
     setLoadingHistorique(false)
+  }
+
+  const fermerModal = () => {
+    setSelectedClient(null)
+    setEditingNom(false)
+    setConfirmDelete(false)
   }
 
   const enregistrerPaiement = async () => {
@@ -46,9 +66,9 @@ export default function ClientsView() {
     setSavingPaiement(true)
     const nouvelleDette = round2(Math.max(0, selectedClient.debt - montant))
     await supabase
-      .from('clients')
-      .update({ debt: nouvelleDette })
-      .eq('id', selectedClient.id)
+        .from('clients')
+        .update({ debt: nouvelleDette })
+        .eq('id', selectedClient.id)
     const clientMaj = { ...selectedClient, debt: nouvelleDette }
     setSelectedClient(clientMaj)
     setClients(cs => cs.map(c => c.id === clientMaj.id ? clientMaj : c))
@@ -60,10 +80,10 @@ export default function ClientsView() {
     if (!nouveauNom.trim()) return
     setSavingClient(true)
     const { data } = await supabase
-      .from('clients')
-      .insert({ name: nouveauNom.trim(), phone: nouveauTel.trim() || null, debt: 0 })
-      .select()
-      .single()
+        .from('clients')
+        .insert({ name: nouveauNom.trim(), phone: nouveauTel.trim() || null, debt: 0 })
+        .select()
+        .single()
     if (data) setClients(cs => [...cs, data].sort((a, b) => a.name.localeCompare(b.name)))
     setNouveauNom('')
     setNouveauTel('')
@@ -71,182 +91,293 @@ export default function ClientsView() {
     setShowAddClient(false)
   }
 
+  // ── Modifier le nom ──────────────────────────────────────────────────────────
+  const demarrerEditionNom = () => {
+    setEditNomValue(selectedClient.name)
+    setEditingNom(true)
+    setConfirmDelete(false)
+  }
+
+  const sauvegarderNom = async () => {
+    const nom = editNomValue.trim()
+    if (!nom || nom === selectedClient.name) { setEditingNom(false); return }
+    setSavingNom(true)
+    const { error } = await supabase
+        .from('clients')
+        .update({ name: nom })
+        .eq('id', selectedClient.id)
+    if (!error) {
+      const clientMaj = { ...selectedClient, name: nom }
+      setSelectedClient(clientMaj)
+      setClients(cs => cs.map(c => c.id === clientMaj.id ? clientMaj : c).sort((a, b) => a.name.localeCompare(b.name)))
+    }
+    setSavingNom(false)
+    setEditingNom(false)
+  }
+
+  // ── Supprimer le client ──────────────────────────────────────────────────────
+  const supprimerClient = async () => {
+    setDeleting(true)
+    const { error } = await supabase
+        .from('clients')
+        .delete()
+        .eq('id', selectedClient.id)
+    if (!error) {
+      setClients(cs => cs.filter(c => c.id !== selectedClient.id))
+      fermerModal()
+    }
+    setDeleting(false)
+  }
+
   const totalDettes = clients.reduce((sum, c) => sum + (c.debt ?? 0), 0)
   const clientsAvecDette = clients.filter(c => c.debt > 0).length
+  const aAchats = historique.length > 0
+  const clientsFiltres = clients.filter(c =>
+      c.name.toLowerCase().includes(searchClient.toLowerCase()) ||
+      (c.phone ?? '').includes(searchClient)
+  )
 
   const formatDate = (iso) => new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })
 
   if (loading) return <div style={s.loading}>Loading…</div>
 
   return (
-    <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
-      <div style={s.headerRow}>
-        <p style={s.titre}>Customers</p>
-        <button style={s.addBtn} onClick={() => setShowAddClient(true)}>+ Add</button>
-      </div>
+      <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
+        <div style={s.headerRow}>
+          <p style={s.titre}>Customers</p>
+          <button style={s.addBtn} onClick={() => setShowAddClient(true)}>+ Add</button>
+        </div>
 
-      {/* KPIs */}
-      <div style={s.kpiRow}>
-        <div style={s.kpiCard}>
-          <div style={s.kpiLabel}>Outstanding debt</div>
-          <div style={{ ...s.kpiValue, color: totalDettes > 0 ? '#C45000' : '#2E7D42' }}>
-            {totalDettes.toLocaleString()} GH₵
+        {/* KPIs */}
+        <div style={s.kpiRow}>
+          <div style={s.kpiCard}>
+            <div style={s.kpiLabel}>Outstanding debt</div>
+            <div style={{ ...s.kpiValue, color: totalDettes > 0 ? '#C45000' : '#2E7D42' }}>
+              {totalDettes.toLocaleString()} GH₵
+            </div>
+          </div>
+          <div style={s.kpiCard}>
+            <div style={s.kpiLabel}>With balance</div>
+            <div style={s.kpiValue}>{clientsAvecDette}</div>
           </div>
         </div>
-        <div style={s.kpiCard}>
-          <div style={s.kpiLabel}>With balance</div>
-          <div style={s.kpiValue}>{clientsAvecDette}</div>
-        </div>
-      </div>
 
-      {/* Liste clients */}
-      {clients.length === 0 ? (
-        <div style={s.empty}><div style={{ fontSize: '32px', marginBottom: '12px' }}>👥</div>No customers yet</div>
-      ) : (
-        <div style={s.card}>
-          {clients.map((c, i) => (
-            <div
-              key={c.id}
-              style={{ ...s.clientRow, borderBottom: i < clients.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}
-              onClick={() => ouvrirClient(c)}
-            >
-              <div style={s.avatar}>{c.name.charAt(0).toUpperCase()}</div>
-              <div style={s.clientInfo}>
-                <div style={s.clientNom}>{c.name}</div>
-                <div style={s.clientTel}>{c.phone ?? 'No phone'}</div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                {c.debt > 0 && <div style={s.detteAmount}>−{formatPrice(c.debt)} GH₵</div>}
-                {c.credit > 0 && <div style={s.creditAmount}>+{formatPrice(c.credit)} GH₵ credit</div>}
-                {!(c.debt > 0) && !(c.credit > 0) && <div style={s.cleared}>✓ Cleared</div>}
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#CCC" strokeWidth="2" style={{ marginTop: '4px' }}>
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+        {/* Recherche */}
+        <input
+            style={{width:'100%',padding:'12px 16px',borderRadius:'12px',border:'1.5px solid #EBEBEB',fontSize:'14px',fontFamily:"'DM Sans',sans-serif",color:'#1A1A1A',outline:'none',marginBottom:'16px',boxSizing:'border-box',background:'white'}}
+            placeholder="Search customers…"
+            value={searchClient}
+            onChange={e => setSearchClient(e.target.value)}
+        />
 
-      {/* Modal détail client */}
-      {selectedClient && (
-        <div style={s.overlay} onClick={e => { if (e.target === e.currentTarget) setSelectedClient(null) }}>
-          <div style={s.modal}>
-            <div style={s.handle} />
-
-            <div style={s.modalHeader}>
-              <div style={s.modalAvatar}>{selectedClient.name.charAt(0).toUpperCase()}</div>
-              <div>
-                <div style={s.modalNom}>{selectedClient.name}</div>
-                <div style={s.modalTel}>{selectedClient.phone ?? 'No phone'}</div>
-              </div>
-            </div>
-
-            {/* Solde dette */}
-            <div style={{ ...s.detteBanner, background: selectedClient.debt > 0 ? '#FFF5EE' : '#F0FBF3' }}>
-              <div style={s.detteBannerLabel}>Current balance</div>
-              <div style={{ ...s.detteBannerValue, color: selectedClient.debt > 0 ? '#C45000' : '#2E7D42' }}>
-                {selectedClient.debt > 0 ? `−${selectedClient.debt.toLocaleString()} GH₵` : 'Cleared ✓'}
-              </div>
-            </div>
-
-            {/* Avoir (store credit) */}
-            {selectedClient.credit > 0 && (
-                <div style={{ ...s.detteBanner, background: '#E8F5EC' }}>
-                  <div style={s.detteBannerLabel}>Store credit</div>
-                  <div style={{ ...s.detteBannerValue, color: '#2E7D42' }}>
-                    +{formatPrice(selectedClient.credit)} GH₵
-                  </div>
-                </div>
-            )}
-
-            {/* Enregistrer un paiement */}
-            {selectedClient.debt > 0 && (
-              <div style={s.paiementSection}>
-                <div style={s.fieldLabel}>Record a payment</div>
-                <div style={s.paiementRow}>
-                  <input
-                    style={s.paiementInput}
-                    type="number"
-                    step="0.01"
-                    inputMode="decimal"
-                    placeholder="Amount (GH₵)"
-                    value={montantRemboursement}
-                    onChange={e => setMontantRemboursement(e.target.value)}
-                  />
-                  <button
-                    style={{ ...s.paiementBtn, opacity: (!montantRemboursement || savingPaiement) ? 0.5 : 1 }}
-                    onClick={enregistrerPaiement}
-                    disabled={!montantRemboursement || savingPaiement}
+        {/* Liste clients */}
+        {clientsFiltres.length === 0 ? (
+            <div style={s.empty}><div style={{ fontSize: '32px', marginBottom: '12px' }}>👥</div>No customers yet</div>
+        ) : (
+            <div style={s.card}>
+              {clientsFiltres.map((c, i) => (
+                  <div
+                      key={c.id}
+                      style={{ ...s.clientRow, borderBottom: i < clientsFiltres.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}
+                      onClick={() => ouvrirClient(c)}
                   >
-                    {savingPaiement ? '…' : 'Pay'}
-                  </button>
-                </div>
-                <button
-                  style={s.fullPayBtn}
-                  onClick={() => setMontantRemboursement(String(selectedClient.debt))}
-                >
-                  Pay full amount ({selectedClient.debt.toLocaleString()} GH₵)
-                </button>
-              </div>
-            )}
-
-            {/* Historique achats */}
-            <div style={s.fieldLabel}>Purchase history</div>
-            {loadingHistorique ? (
-              <div style={s.loading}>Loading…</div>
-            ) : historique.length === 0 ? (
-              <div style={s.emptySmall}>No purchases yet</div>
-            ) : (
-              <div style={s.historiqueList}>
-                {historique.map((v, i) => (
-                  <div key={v.id} style={{ ...s.historiqueRow, borderBottom: i < historique.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                    <div style={s.histEmoji}>{v.products?.emoji ?? '🍬'}</div>
-                    <div style={{ flex: 1 }}>
-                      <div style={s.histNom}>{v.products?.name ?? '—'}</div>
-                      <div style={s.histDate}>{formatDate(v.created_at)} · ×{v.qty}</div>
+                    <div style={s.avatar}>{c.name.charAt(0).toUpperCase()}</div>
+                    <div style={s.clientInfo}>
+                      <div style={s.clientNom}>{c.name}</div>
+                      <div style={s.clientTel}>{c.phone ?? 'No phone'}</div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={s.histMontant}>{v.amount?.toLocaleString()} GH₵</div>
-                      <span style={v.type === 'cash' ? s.badgeCash : s.badgeDette}>
-                        {v.type === 'cash' ? 'Paid' : 'Credit'}
-                      </span>
+                      {c.debt > 0 && <div style={s.detteAmount}>−{formatPrice(c.debt)} GH₵</div>}
+                      {c.credit > 0 && <div style={s.creditAmount}>+{formatPrice(c.credit)} GH₵ credit</div>}
+                      {!(c.debt > 0) && !(c.credit > 0) && <div style={s.cleared}>✓ Cleared</div>}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#CCC" strokeWidth="2" style={{ marginTop: '4px' }}>
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
                     </div>
                   </div>
-                ))}
+              ))}
+            </div>
+        )}
+
+        {/* ── Modal détail client ── */}
+        {selectedClient && (
+            <div style={s.overlay} onClick={e => { if (e.target === e.currentTarget) fermerModal() }}>
+              <div style={s.modal}>
+                <div style={s.handle} />
+
+                {/* En-tête : avatar + nom (éditable) + téléphone */}
+                <div style={s.modalHeader}>
+                  <div style={s.modalAvatar}>{selectedClient.name.charAt(0).toUpperCase()}</div>
+                  <div style={{ flex: 1 }}>
+                    {editingNom ? (
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <input
+                              style={{ ...s.input, flex: 1, fontSize: '15px', padding: '8px 12px' }}
+                              value={editNomValue}
+                              onChange={e => setEditNomValue(e.target.value)}
+                              autoFocus
+                          />
+                          <button
+                              style={{ ...s.iconBtn, background: '#1A1A1A', color: 'white' }}
+                              onClick={sauvegarderNom}
+                              disabled={savingNom}
+                          >
+                            {savingNom ? '…' : '✓'}
+                          </button>
+                          <button
+                              style={{ ...s.iconBtn, background: '#F0F0F0', color: '#666' }}
+                              onClick={() => setEditingNom(false)}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                    ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={s.modalNom}>{selectedClient.name}</div>
+                          <button style={s.editPill} onClick={demarrerEditionNom}>
+                            ✏ Edit
+                          </button>
+                        </div>
+                    )}
+                    <div style={s.modalTel}>{selectedClient.phone ?? 'No phone'}</div>
+                  </div>
+                </div>
+
+                {/* Solde dette */}
+                <div style={{ ...s.detteBanner, background: selectedClient.debt > 0 ? '#FFF5EE' : '#F0FBF3' }}>
+                  <div style={s.detteBannerLabel}>Current balance</div>
+                  <div style={{ ...s.detteBannerValue, color: selectedClient.debt > 0 ? '#C45000' : '#2E7D42' }}>
+                    {selectedClient.debt > 0 ? `−${selectedClient.debt.toLocaleString()} GH₵` : 'Cleared ✓'}
+                  </div>
+                </div>
+
+                {/* Avoir (store credit) */}
+                {selectedClient.credit > 0 && (
+                    <div style={{ ...s.detteBanner, background: '#E8F5EC' }}>
+                      <div style={s.detteBannerLabel}>Store credit</div>
+                      <div style={{ ...s.detteBannerValue, color: '#2E7D42' }}>
+                        +{formatPrice(selectedClient.credit)} GH₵
+                      </div>
+                    </div>
+                )}
+
+                {/* Enregistrer un paiement */}
+                {selectedClient.debt > 0 && (
+                    <div style={s.paiementSection}>
+                      <div style={s.fieldLabel}>Record a payment</div>
+                      <div style={s.paiementRow}>
+                        <input
+                            style={s.paiementInput}
+                            type="number"
+                            step="0.01"
+                            inputMode="decimal"
+                            placeholder="Amount (GH₵)"
+                            value={montantRemboursement}
+                            onChange={e => setMontantRemboursement(e.target.value)}
+                        />
+                        <button
+                            style={{ ...s.paiementBtn, opacity: (!montantRemboursement || savingPaiement) ? 0.5 : 1 }}
+                            onClick={enregistrerPaiement}
+                            disabled={!montantRemboursement || savingPaiement}
+                        >
+                          {savingPaiement ? '…' : 'Pay'}
+                        </button>
+                      </div>
+                      <button
+                          style={s.fullPayBtn}
+                          onClick={() => setMontantRemboursement(String(selectedClient.debt))}
+                      >
+                        Pay full amount ({selectedClient.debt.toLocaleString()} GH₵)
+                      </button>
+                    </div>
+                )}
+
+                {/* Historique achats */}
+                <div style={s.fieldLabel}>Purchase history</div>
+                {loadingHistorique ? (
+                    <div style={s.loading}>Loading…</div>
+                ) : historique.length === 0 ? (
+                    <div style={s.emptySmall}>No purchases yet</div>
+                ) : (
+                    <div style={s.historiqueList}>
+                      {historique.map((v, i) => (
+                          <div key={v.id} style={{ ...s.historiqueRow, borderBottom: i < historique.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
+                            <div style={s.histEmoji}>{v.products?.emoji ?? '🍬'}</div>
+                            <div style={{ flex: 1 }}>
+                              <div style={s.histNom}>{v.products?.name ?? '—'}</div>
+                              <div style={s.histDate}>{formatDate(v.created_at)} · ×{v.qty}</div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={s.histMontant}>{v.amount?.toLocaleString()} GH₵</div>
+                              <span style={v.type === 'cash' ? s.badgeCash : s.badgeDette}>
+                        {v.type === 'cash' ? 'Paid' : 'Credit'}
+                      </span>
+                            </div>
+                          </div>
+                      ))}
+                    </div>
+                )}
+
+                {/* ── Zone suppression ── */}
+                {!loadingHistorique && !aAchats && (
+                    <div style={{ marginTop: '24px', borderTop: '1px solid #F0F0F0', paddingTop: '20px' }}>
+                      {!confirmDelete ? (
+                          <button style={s.deleteBtn} onClick={() => setConfirmDelete(true)}>
+                            🗑 Delete customer
+                          </button>
+                      ) : (
+                          <div style={s.confirmBox}>
+                            <div style={s.confirmText}>Delete <strong>{selectedClient.name}</strong>? This cannot be undone.</div>
+                            <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
+                              <button
+                                  style={{ ...s.confirmCancelBtn }}
+                                  onClick={() => setConfirmDelete(false)}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                  style={{ ...s.confirmDeleteBtn, opacity: deleting ? 0.5 : 1 }}
+                                  onClick={supprimerClient}
+                                  disabled={deleting}
+                              >
+                                {deleting ? 'Deleting…' : 'Yes, delete'}
+                              </button>
+                            </div>
+                          </div>
+                      )}
+                    </div>
+                )}
               </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Modal ajout client */}
-      {showAddClient && (
-        <div style={s.overlay} onClick={e => { if (e.target === e.currentTarget) setShowAddClient(false) }}>
-          <div style={{ ...s.modal, paddingBottom: '40px' }}>
-            <div style={s.handle} />
-            <div style={{ ...s.modalNom, marginBottom: '24px' }}>New customer</div>
-
-            <div style={s.fieldGroup}>
-              <div style={s.fieldLabel}>Full name *</div>
-              <input style={s.input} placeholder="Aminata Diallo" value={nouveauNom} onChange={e => setNouveauNom(e.target.value)} />
             </div>
-            <div style={s.fieldGroup}>
-              <div style={s.fieldLabel}>Phone (optional)</div>
-              <input style={s.input} placeholder="07 12 34 56" value={nouveauTel} onChange={e => setNouveauTel(e.target.value)} />
-            </div>
+        )}
 
-            <button
-              style={{ ...s.submitBtn, opacity: (!nouveauNom.trim() || savingClient) ? 0.5 : 1 }}
-              onClick={ajouterClient}
-              disabled={!nouveauNom.trim() || savingClient}
-            >
-              {savingClient ? 'Saving…' : 'Add customer'}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
+        {/* ── Modal ajout client ── */}
+        {showAddClient && (
+            <div style={s.overlay} onClick={e => { if (e.target === e.currentTarget) setShowAddClient(false) }}>
+              <div style={{ ...s.modal, paddingBottom: '40px' }}>
+                <div style={s.handle} />
+                <div style={{ ...s.modalNom, marginBottom: '24px' }}>New customer</div>
+
+                <div style={s.fieldGroup}>
+                  <div style={s.fieldLabel}>Full name *</div>
+                  <input style={s.input} placeholder="Aminata Diallo" value={nouveauNom} onChange={e => setNouveauNom(e.target.value)} />
+                </div>
+                <div style={s.fieldGroup}>
+                  <div style={s.fieldLabel}>Phone (optional)</div>
+                  <input style={s.input} placeholder="07 12 34 56" value={nouveauTel} onChange={e => setNouveauTel(e.target.value)} />
+                </div>
+
+                <button
+                    style={{ ...s.submitBtn, opacity: (!nouveauNom.trim() || savingClient) ? 0.5 : 1 }}
+                    onClick={ajouterClient}
+                    disabled={!nouveauNom.trim() || savingClient}
+                >
+                  {savingClient ? 'Saving…' : 'Add customer'}
+                </button>
+              </div>
+            </div>
+        )}
+      </div>
   )
 }
 
@@ -297,4 +428,12 @@ const s = {
   input: { width: '100%', padding: '13px 16px', borderRadius: '12px', border: '1.5px solid #EBEBEB', fontSize: '15px', fontFamily: "'DM Sans', sans-serif", color: '#1A1A1A', outline: 'none', boxSizing: 'border-box' },
   submitBtn: { width: '100%', padding: '16px', background: '#1A1A1A', color: 'white', border: 'none', borderRadius: '16px', fontFamily: "'DM Sans', sans-serif", fontSize: '15px', fontWeight: '500', cursor: 'pointer', marginTop: '8px' },
   creditAmount: { fontSize: '12px', fontWeight: '600', color: '#2E7D42', marginTop: '2px' },
+  // Nouveaux styles
+  editPill: { fontSize: '11px', fontWeight: '500', color: '#999', background: '#F5F5F5', border: 'none', borderRadius: '100px', padding: '3px 10px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  iconBtn: { width: '32px', height: '32px', border: 'none', borderRadius: '8px', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'DM Sans', sans-serif", flexShrink: 0 },
+  deleteBtn: { width: '100%', padding: '13px', background: 'none', border: '1.5px solid #FFE5E5', borderRadius: '14px', color: '#CC3333', fontSize: '13px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  confirmBox: { background: '#FFF5F5', borderRadius: '14px', padding: '16px' },
+  confirmText: { fontSize: '13.5px', color: '#1A1A1A', lineHeight: 1.5 },
+  confirmCancelBtn: { flex: 1, padding: '11px', background: '#F0F0F0', border: 'none', borderRadius: '12px', fontSize: '13px', fontWeight: '500', color: '#666', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  confirmDeleteBtn: { flex: 1, padding: '11px', background: '#CC3333', border: 'none', borderRadius: '12px', fontSize: '13px', fontWeight: '500', color: 'white', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
 }
