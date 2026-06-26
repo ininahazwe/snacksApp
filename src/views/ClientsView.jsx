@@ -43,6 +43,7 @@ export default function ClientsView() {
     setMontantRemboursement('')
     setEditingNom(false)
     setConfirmDelete(false)
+    setSurplusPaiement(null)
     setLoadingHistorique(true)
     const { data } = await supabase
         .from('sales')
@@ -58,22 +59,99 @@ export default function ClientsView() {
     setSelectedClient(null)
     setEditingNom(false)
     setConfirmDelete(false)
+    setSurplusPaiement(null)
   }
 
   const enregistrerPaiement = async () => {
     const montant = parseFloat(montantRemboursement)
     if (!montant || montant <= 0) return
     setSavingPaiement(true)
-    const nouvelleDette = round2(Math.max(0, selectedClient.debt - montant))
+
+    const dette = selectedClient.debt
+    const montantApplique = round2(Math.min(montant, dette))
+    const surplus = round2(Math.max(0, montant - dette))
+    const nouvelleDette = round2(Math.max(0, dette - montant))
+
     await supabase
         .from('clients')
         .update({ debt: nouvelleDette })
         .eq('id', selectedClient.id)
+    // Tracer le paiement dans l'historique d'achats (seulement la part qui a réglé la dette)
+    await supabase.from('sales').insert({
+      client_id: selectedClient.id,
+      product_id: null,
+      qty: 0,
+      amount: montantApplique,
+      type: 'paiement',
+    })
     const clientMaj = { ...selectedClient, debt: nouvelleDette }
     setSelectedClient(clientMaj)
     setClients(cs => cs.map(c => c.id === clientMaj.id ? clientMaj : c))
     setMontantRemboursement('')
     setSavingPaiement(false)
+    await rafraichirHistorique(selectedClient.id)
+
+    // Si le client a versé plus que sa dette, proposer de convertir le surplus en avoir
+    if (surplus > 0) {
+      setSurplusPaiement(surplus)
+    }
+  }
+
+  // ── Surplus de paiement → proposition de conversion en avoir ────────────────
+  const [surplusPaiement, setSurplusPaiement] = useState(null)
+  const [convertingSurplus, setConvertingSurplus] = useState(false)
+
+  const convertirSurplusEnAvoir = async () => {
+    if (!surplusPaiement) return
+    setConvertingSurplus(true)
+    const nouvelAvoir = round2(selectedClient.credit + surplusPaiement)
+    await supabase
+        .from('clients')
+        .update({ credit: nouvelAvoir })
+        .eq('id', selectedClient.id)
+    const clientMaj = { ...selectedClient, credit: nouvelAvoir }
+    setSelectedClient(clientMaj)
+    setClients(cs => cs.map(c => c.id === clientMaj.id ? clientMaj : c))
+    setConvertingSurplus(false)
+    setSurplusPaiement(null)
+  }
+
+  // ── Utiliser l'avoir pour solder (tout ou partie) la dette ──────────────────
+  const [usingCredit, setUsingCredit] = useState(false)
+
+  const utiliserAvoir = async () => {
+    const montantUtilise = round2(Math.min(selectedClient.credit, selectedClient.debt))
+    if (montantUtilise <= 0) return
+    setUsingCredit(true)
+    const nouvelleDette = round2(selectedClient.debt - montantUtilise)
+    const nouvelAvoir = round2(selectedClient.credit - montantUtilise)
+    await supabase
+        .from('clients')
+        .update({ debt: nouvelleDette, credit: nouvelAvoir })
+        .eq('id', selectedClient.id)
+    // Tracer l'utilisation de l'avoir dans l'historique d'achats
+    await supabase.from('sales').insert({
+      client_id: selectedClient.id,
+      product_id: null,
+      qty: 0,
+      amount: montantUtilise,
+      type: 'paiement',
+    })
+    const clientMaj = { ...selectedClient, debt: nouvelleDette, credit: nouvelAvoir }
+    setSelectedClient(clientMaj)
+    setClients(cs => cs.map(c => c.id === clientMaj.id ? clientMaj : c))
+    setUsingCredit(false)
+    await rafraichirHistorique(selectedClient.id)
+  }
+
+  const rafraichirHistorique = async (clientId) => {
+    const { data } = await supabase
+        .from('sales')
+        .select('*, products(name, emoji)')
+        .eq('client_id', clientId)
+        .order('created_at', { ascending: false })
+        .limit(20)
+    setHistorique(data ?? [])
   }
 
   const ajouterClient = async () => {
@@ -261,6 +339,30 @@ export default function ClientsView() {
                     </div>
                 )}
 
+                {/* Surplus de paiement : proposer de le convertir en avoir */}
+                {surplusPaiement > 0 && (
+                    <div style={s.surplusBanner}>
+                      <div style={s.surplusText}>
+                        Payment exceeded the debt by <strong>{formatPrice(surplusPaiement)} GH₵</strong>. Convert it to store credit?
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
+                        <button
+                            style={s.surplusDiscardBtn}
+                            onClick={() => setSurplusPaiement(null)}
+                        >
+                          Discard
+                        </button>
+                        <button
+                            style={{ ...s.surplusConvertBtn, opacity: convertingSurplus ? 0.5 : 1 }}
+                            onClick={convertirSurplusEnAvoir}
+                            disabled={convertingSurplus}
+                        >
+                          {convertingSurplus ? 'Converting…' : `Convert (+${formatPrice(surplusPaiement)} GH₵)`}
+                        </button>
+                      </div>
+                    </div>
+                )}
+
                 {/* Enregistrer un paiement */}
                 {selectedClient.debt > 0 && (
                     <div style={s.paiementSection}>
@@ -289,6 +391,19 @@ export default function ClientsView() {
                       >
                         Pay full amount ({selectedClient.debt.toLocaleString()} GH₵)
                       </button>
+
+                      {/* Utiliser l'avoir sur la dette */}
+                      {selectedClient.credit > 0 && (
+                          <button
+                              style={{ ...s.useCreditBtn, opacity: usingCredit ? 0.5 : 1 }}
+                              onClick={utiliserAvoir}
+                              disabled={usingCredit}
+                          >
+                            {usingCredit
+                                ? 'Applying…'
+                                : `💳 Use store credit (−${formatPrice(Math.min(selectedClient.credit, selectedClient.debt))} GH₵)`}
+                          </button>
+                      )}
                     </div>
                 )}
 
@@ -302,16 +417,22 @@ export default function ClientsView() {
                     <div style={s.historiqueList}>
                       {historique.map((v, i) => (
                           <div key={v.id} style={{ ...s.historiqueRow, borderBottom: i < historique.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                            <div style={s.histEmoji}>{v.products?.emoji ?? '🍬'}</div>
+                            <div style={s.histEmoji}>{v.type === 'paiement' ? '💳' : (v.products?.emoji ?? '🍬')}</div>
                             <div style={{ flex: 1 }}>
-                              <div style={s.histNom}>{v.products?.name ?? '—'}</div>
-                              <div style={s.histDate}>{formatDate(v.created_at)} · ×{v.qty}</div>
+                              <div style={s.histNom}>{v.type === 'paiement' ? 'Debt payment' : (v.products?.name ?? '—')}</div>
+                              <div style={s.histDate}>{formatDate(v.created_at)}{v.type !== 'paiement' ? ` · ×${v.qty}` : ''}</div>
                             </div>
                             <div style={{ textAlign: 'right' }}>
-                              <div style={s.histMontant}>{v.amount?.toLocaleString()} GH₵</div>
-                              <span style={v.type === 'cash' ? s.badgeCash : s.badgeDette}>
-                        {v.type === 'cash' ? 'Paid' : 'Credit'}
-                      </span>
+                              <div style={{ ...s.histMontant, color: v.type === 'paiement' ? '#2E7D42' : '#1A1A1A' }}>
+                                {v.type === 'paiement' ? '−' : ''}{v.amount?.toLocaleString()} GH₵
+                              </div>
+                              {v.type === 'paiement' ? (
+                                  <span style={s.badgeCash}>Payment</span>
+                              ) : (
+                                  <span style={v.type === 'cash' ? s.badgeCash : s.badgeDette}>
+                            {v.type === 'cash' ? 'Paid' : 'Credit'}
+                          </span>
+                              )}
                             </div>
                           </div>
                       ))}
@@ -415,6 +536,11 @@ const s = {
   paiementInput: { flex: 1, padding: '12px 14px', borderRadius: '12px', border: '1.5px solid #EBEBEB', fontSize: '15px', fontFamily: "'DM Sans', sans-serif", color: '#1A1A1A', outline: 'none' },
   paiementBtn: { padding: '12px 20px', background: '#2E7D42', color: 'white', border: 'none', borderRadius: '12px', fontSize: '14px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
   fullPayBtn: { width: '100%', padding: '10px', background: 'none', border: '1.5px dashed #CCC', borderRadius: '12px', fontSize: '13px', color: '#999', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  useCreditBtn: { width: '100%', padding: '11px', marginTop: '8px', background: '#E8F5EC', border: '1.5px solid #C8E6CF', borderRadius: '12px', fontSize: '13px', fontWeight: '500', color: '#2E7D42', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  surplusBanner: { background: '#FFF8E8', border: '1.5px solid #F5E0A8', borderRadius: '14px', padding: '14px 16px', marginBottom: '20px' },
+  surplusText: { fontSize: '13px', color: '#1A1A1A', lineHeight: 1.5 },
+  surplusDiscardBtn: { flex: 1, padding: '10px', background: '#F0F0F0', border: 'none', borderRadius: '12px', fontSize: '13px', fontWeight: '500', color: '#666', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  surplusConvertBtn: { flex: 1, padding: '10px', background: '#2E7D42', border: 'none', borderRadius: '12px', fontSize: '13px', fontWeight: '500', color: 'white', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
   historiqueList: { background: '#FAFAFA', borderRadius: '14px', overflow: 'hidden', marginTop: '8px' },
   historiqueRow: { display: 'flex', alignItems: 'center', padding: '12px 14px', gap: '10px' },
   histEmoji: { width: '32px', height: '32px', borderRadius: '8px', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', flexShrink: 0 },
