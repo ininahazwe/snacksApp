@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { formatPrice, round2 } from '../lib/format'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
 export default function Dashboard({ onProductTap }) {
   const [stats, setStats] = useState({ today: 0, week: 0, month: 0, nbToday: 0, dettes: 0, stockBas: 0, panieMoyen: 0, cashCount: 0, detteCount: 0 })
@@ -147,80 +148,73 @@ export default function Dashboard({ onProductTap }) {
           </div>
         </div>
 
-        {/* Top produits */}
+        {/* Top Produits - BarChart Vertical FULL WIDTH */}
         {topProduits.length > 0 && (
-            <>
-              <p style={s.sectionTitle}>🔥 Top 5 products · this month</p>
-              <div style={s.card}>
-                {topProduits.map((p, i) => (
-                    <div key={p.nom ?? i} style={{ ...s.topRow, borderBottom: i < topProduits.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                      <div style={s.topRank}>#{i + 1}</div>
-                      <div style={s.topEmoji}>{p.emoji ?? '🍬'}</div>
-                      <div style={{ flex: 1 }}>
-                        <div style={s.topNom}>{p.nom}</div>
-                        <div style={s.topQty}>{p.qty} sold · {p.total.toLocaleString()} GH₵</div>
-                      </div>
-                    </div>
-                ))}
-              </div>
-            </>
+            <div style={s.card}>
+              <p style={s.sectionTitle}>🔥 Top products · this month</p>
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart
+                    data={topProduits.map((p) => ({
+                      name: p.nom,
+                      emoji: p.emoji,
+                      value: p.total,
+                      qty: p.qty,
+                    }))}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 80 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
+                  <XAxis
+                      dataKey="name"
+                      stroke="#999"
+                      style={{ fontSize: '12px' }}
+                      angle={-45}
+                      textAnchor="end"
+                      height={100}
+                  />
+                  <YAxis stroke="#999" style={{ fontSize: '11px' }} />
+                  <Tooltip
+                      contentStyle={{ background: '#1A1A1A', border: 'none', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                      cursor={{ fill: 'rgba(0,0,0,0.05)' }}
+                      formatter={(value) => value.toLocaleString() + ' GH₵'}
+                  />
+                  <Bar dataKey="value" fill="#5BAD72" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
         )}
 
-        {/* Top clients */}
+        {/* Top Clients - BarChart Vertical FULL WIDTH */}
         {topClients.length > 0 && (
-            <>
-              <p style={s.sectionTitle}>👥 Top 5 clients · this month</p>
-              <div style={s.card}>
-                {topClients.map((c, i) => (
-                    <div key={c.nom ?? i} style={{ ...s.topRow, borderBottom: i < topClients.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                      <div style={s.topRank}>#{i + 1}</div>
-                      <div style={s.topEmoji}>👤</div>
-                      <div style={{ flex: 1 }}>
-                        <div style={s.topNom}>{c.nom}</div>
-                        <div style={s.topQty}>{c.nb} transaction{c.nb !== 1 ? 's' : ''}</div>
-                      </div>
-                      <div style={s.topMontant}>{c.total.toLocaleString()} GH₵</div>
-                    </div>
-                ))}
-              </div>
-            </>
-        )}
-
-        {/* Stock critique */}
-        {stockCritique.length > 0 && (
-            <>
-              <p style={s.sectionTitle}>⚠️ Low stock · Alert</p>
-              <div style={s.card}>
-                {stockCritique.map((p, i) => (
-                    <div key={p.id} style={{ ...s.topRow, borderBottom: i < stockCritique.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none', backgroundColor: i % 2 === 0 ? 'rgba(196, 80, 0, 0.02)' : 'transparent' }}>
-                      <div style={{ ...s.topEmoji, fontSize: '16px' }}>{p.emoji ?? '🍬'}</div>
-                      <div style={{ flex: 1 }}>
-                        <div style={s.topNom}>{p.name}</div>
-                        <div style={{ ...s.topQty, color: '#C45000', fontWeight: '500' }}>Stock: {p.stock} unit{p.stock !== 1 ? 's' : ''}</div>
-                      </div>
-                    </div>
-                ))}
-              </div>
-            </>
-        )}
-
-        {/* Clients débiteurs */}
-        {clientsDebiteurs.length > 0 && (
-            <>
-              <p style={s.sectionTitle}>💳 Clients with debt</p>
-              <div style={s.card}>
-                {clientsDebiteurs.map((c, i) => (
-                    <div key={c.id} style={{ ...s.topRow, borderBottom: i < clientsDebiteurs.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                      <div style={s.topEmoji}>👤</div>
-                      <div style={{ flex: 1 }}>
-                        <div style={s.topNom}>{c.name}</div>
-                        <div style={s.topQty}>Outstanding balance</div>
-                      </div>
-                      <div style={{ ...s.topMontant, color: '#C45000', fontWeight: '600' }}>{c.debt.toLocaleString()} GH₵</div>
-                    </div>
-                ))}
-              </div>
-            </>
+            <div style={s.card}>
+              <p style={s.sectionTitle}>👥 Top clients · this month</p>
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart
+                    data={topClients.map((c) => ({
+                      name: c.nom,
+                      value: c.total,
+                      nb: c.nb,
+                    }))}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 80 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
+                  <XAxis
+                      dataKey="name"
+                      stroke="#999"
+                      style={{ fontSize: '12px' }}
+                      angle={-45}
+                      textAnchor="end"
+                      height={100}
+                  />
+                  <YAxis stroke="#999" style={{ fontSize: '11px' }} />
+                  <Tooltip
+                      contentStyle={{ background: '#1A1A1A', border: 'none', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                      cursor={{ fill: 'rgba(0,0,0,0.05)' }}
+                      formatter={(value) => value.toLocaleString() + ' GH₵'}
+                  />
+                  <Bar dataKey="value" fill="#E84B6E" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
         )}
 
         {/* Ventes récentes */}
@@ -252,30 +246,24 @@ export default function Dashboard({ onProductTap }) {
 
 const s = {
   loading: { color: '#999', fontSize: '14px', paddingTop: '20px' },
-  kpiAccent: { background: '#1A1A1A', borderRadius: '20px', padding: '22px 20px', marginBottom: '12px' },
-  kpiAccentLabel: { fontSize: '11px', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '8px' },
-  kpiAccentValue: { fontFamily: "'DM Serif Display', serif", fontSize: '32px', color: 'white', letterSpacing: '-0.5px' },
-  kpiAccentSub: { fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginTop: '6px' },
-  kpiGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '24px' },
-  kpiCard: { background: 'white', borderRadius: '16px', padding: '14px 16px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' },
+  kpiAccent: { background: '#1A1A1A', borderRadius: '24px', padding: '28px 24px', marginBottom: '20px', color: 'white' },
+  kpiAccentLabel: { fontSize: '12px', color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '8px' },
+  kpiAccentValue: { fontFamily: "'DM Serif Display', serif", fontSize: '40px', letterSpacing: '-1px', marginBottom: '4px' },
+  kpiAccentSub: { fontSize: '13px', color: 'rgba(255,255,255,0.5)' },
+  kpiGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' },
+  kpiCard: { background: 'white', borderRadius: '16px', padding: '16px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' },
   kpiLabel: { fontSize: '11px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' },
-  kpiValue: { fontFamily: "'DM Serif Display', serif", fontSize: '20px', color: '#1A1A1A' },
-  kpiSub: { fontSize: '11px', color: '#BBB', marginTop: '3px' },
-  sectionTitle: { fontFamily: "'DM Serif Display', serif", fontSize: '16px', color: '#1A1A1A', marginBottom: '12px' },
-  card: { background: 'white', borderRadius: '18px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)', overflow: 'hidden', marginBottom: '20px' },
-  empty: { padding: '24px', textAlign: 'center', color: '#BBB', fontSize: '14px' },
-  topRow: { display: 'flex', alignItems: 'center', padding: '12px 16px', gap: '10px' },
-  topRank: { fontSize: '12px', fontWeight: '700', color: '#CCC', width: '20px', flexShrink: 0 },
-  topEmoji: { fontSize: '20px', width: '28px', flexShrink: 0 },
-  topNom: { fontSize: '13.5px', fontWeight: '500', color: '#1A1A1A' },
-  topQty: { fontSize: '11px', color: '#BBB', marginTop: '1px' },
-  topMontant: { fontFamily: "'DM Serif Display', serif", fontSize: '15px', color: '#1A1A1A', flexShrink: 0 },
-  saleRow: { display: 'flex', alignItems: 'center', padding: '12px 16px', gap: '12px' },
+  kpiValue: { fontFamily: "'DM Serif Display', serif", fontSize: '22px', color: '#1A1A1A' },
+  kpiSub: { fontSize: '11px', color: '#999', marginTop: '2px' },
+  sectionTitle: { fontFamily: "'DM Serif Display', serif", fontSize: '16px', color: '#1A1A1A', marginBottom: '12px', marginTop: '0px' },
+  card: { background: 'white', borderRadius: '18px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)', overflow: 'hidden', padding: '16px', marginBottom: '20px' },
+  saleRow: { display: 'flex', alignItems: 'center', padding: '12px 0', gap: '12px' },
   saleEmoji: { width: '34px', height: '34px', borderRadius: '9px', background: '#F5F5F5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', flexShrink: 0 },
   saleInfo: { flex: 1, minWidth: 0 },
   saleName: { fontSize: '13px', fontWeight: '500', color: '#1A1A1A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   saleMeta: { fontSize: '11px', color: '#BBB', marginTop: '1px' },
   saleAmount: { fontSize: '13px', fontWeight: '600', color: '#1A1A1A' },
-  badgeCash: { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#E8F5EC', color: '#2E7D42' },
-  badgeDette: { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#FFF0E8', color: '#C45000' },
+  badgeCash: { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#E8F5EC', color: '#2E7D42', marginTop: '2px' },
+  badgeDette: { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#FFF0E8', color: '#C45000', marginTop: '2px' },
+  empty: { textAlign: 'center', padding: '24px', color: '#BBB', fontSize: '14px' },
 }

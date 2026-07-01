@@ -14,7 +14,8 @@
     "@zxing/library": "^0.21.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.23.1"
+    "react-router-dom": "^6.23.1",
+    "recharts": "^3.9.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.0",
