@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { supabase } from '../lib/supabase'
 
 export default function LoginPage() {
   const { login } = useAuth()
@@ -7,6 +8,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
+
+  // Mode "mot de passe oublié"
+  const [showForgot, setShowForgot] = useState(false)
+  const [forgotEmail, setForgotEmail] = useState('')
+  const [forgotSent, setForgotSent] = useState(false)
+  const [forgotError, setForgotError] = useState(null)
+  const [forgotLoading, setForgotLoading] = useState(false)
 
   const handleSubmit = async () => {
     if (!email || !password) return
@@ -23,6 +31,84 @@ export default function LoginPage() {
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') handleSubmit()
+  }
+
+  const openForgot = () => {
+    setForgotEmail(email)
+    setForgotError(null)
+    setForgotSent(false)
+    setShowForgot(true)
+  }
+
+  const handleForgotSubmit = async () => {
+    if (!forgotEmail) return
+    setForgotError(null)
+    setForgotLoading(true)
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      })
+      if (error) throw error
+      setForgotSent(true)
+    } catch (err) {
+      setForgotError('Could not send the email. Check the address.')
+    } finally {
+      setForgotLoading(false)
+    }
+  }
+
+  const handleForgotKeyDown = (e) => {
+    if (e.key === 'Enter') handleForgotSubmit()
+  }
+
+  if (showForgot) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.card}>
+          <div style={styles.logoWrap}>
+            <span style={styles.logoEmoji}>🍬</span>
+          </div>
+          <h1 style={styles.title}>Forgot password</h1>
+          <p style={styles.subtitle}>
+            {forgotSent
+              ? 'Check your inbox.'
+              : 'Get a password reset link by email (valid for 1 hour).'}
+          </p>
+
+          {!forgotSent && (
+            <>
+              <div style={styles.fieldGroup}>
+                <label style={styles.label}>Email</label>
+                <input
+                  style={styles.input}
+                  type="email"
+                  placeholder="manager@douceurs.com"
+                  value={forgotEmail}
+                  onChange={e => setForgotEmail(e.target.value)}
+                  onKeyDown={handleForgotKeyDown}
+                  autoComplete="email"
+                  autoFocus
+                />
+              </div>
+
+              {forgotError && <div style={styles.error}>{forgotError}</div>}
+
+              <button
+                style={{ ...styles.btn, opacity: forgotLoading ? 0.7 : 1 }}
+                onClick={handleForgotSubmit}
+                disabled={forgotLoading}
+              >
+                {forgotLoading ? 'Sending…' : 'Send reset link'}
+              </button>
+            </>
+          )}
+
+          <button style={styles.linkBtn} onClick={() => setShowForgot(false)}>
+            ← Back to sign in
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -50,7 +136,7 @@ export default function LoginPage() {
         </div>
 
         <div style={styles.fieldGroup}>
-          <label style={styles.label}>Mot de passe</label>
+          <label style={styles.label}>Password</label>
           <input
             style={styles.input}
             type="password"
@@ -70,6 +156,10 @@ export default function LoginPage() {
           disabled={loading}
         >
           {loading ? 'Signing in…' : 'Sign in'}
+        </button>
+
+        <button style={styles.linkBtn} onClick={openForgot}>
+          Forgot password?
         </button>
       </div>
     </div>
@@ -164,5 +254,18 @@ const styles = {
     cursor: 'pointer',
     marginTop: '8px',
     transition: 'background 0.2s',
+  },
+  linkBtn: {
+    display: 'block',
+    width: '100%',
+    background: 'none',
+    border: 'none',
+    color: '#999',
+    fontSize: '13px',
+    fontFamily: "'DM Sans', sans-serif",
+    textAlign: 'center',
+    marginTop: '16px',
+    cursor: 'pointer',
+    padding: '4px',
   },
 }

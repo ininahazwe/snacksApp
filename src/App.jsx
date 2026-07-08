@@ -5,6 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 import RoleGuard from './components/RoleGuard'
 import OfflineBanner from './components/OfflineBanner'
 import LoginPage from './views/LoginPage'
+import ResetPasswordView from './views/ResetPasswordView'
 import Dashboard from './views/Dashboard'
 import VentesView from './views/VentesView'
 import ProduitsView from './views/ProduitsView'
@@ -176,6 +177,7 @@ export default function App() {
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
+            <Route path="/reset-password" element={<ResetPasswordView />} />
             <Route path="/*"    element={<ProtectedRoute><AppLayout /></ProtectedRoute>} />
           </Routes>
         </AuthProvider>
