@@ -20,13 +20,17 @@ export default function Dashboard({ onProductTap }) {
     const lundiDernier = new Date(now); lundiDernier.setDate(now.getDate() - now.getDay() + 1); lundiDernier.setHours(0,0,0,0)
     const premierMois = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
 
+    // On exclut systématiquement les ventes annulées (cancelled_at) et les lignes
+    // paiement/avoir (mouvements de solde client, pas des ventes) des statistiques —
+    // sinon un remboursement de dette ou un avoir gonflait artificiellement le panier
+    // moyen, le nombre de transactions et le classement des meilleurs clients.
     const [{ data: salesToday }, { data: salesWeek }, { data: salesMonth }, { data: clientsData }, { data: stocksData }, { data: recentes }, { data: stockDetails }] = await Promise.all([
-      supabase.from('sales').select('amount, type').gte('created_at', `${today}T00:00:00`),
-      supabase.from('sales').select('amount, type').gte('created_at', lundiDernier.toISOString()),
-      supabase.from('sales').select('amount, type, product_id, qty, client_id, products(name,emoji)').gte('created_at', premierMois),
+      supabase.from('sales').select('amount, type').is('cancelled_at', null).in('type', ['cash', 'dette']).gte('created_at', `${today}T00:00:00`),
+      supabase.from('sales').select('amount, type').is('cancelled_at', null).in('type', ['cash', 'dette']).gte('created_at', lundiDernier.toISOString()),
+      supabase.from('sales').select('amount, type, product_id, qty, client_id, products(name,emoji)').is('cancelled_at', null).in('type', ['cash', 'dette']).gte('created_at', premierMois),
       supabase.from('clients').select('id, debt, name'),
       supabase.from('products').select('id, stock, name, emoji').lt('stock', 10),
-      supabase.from('sales').select('amount, type, created_at, products(name,emoji), clients(name)').order('created_at', { ascending: false }).limit(5),
+      supabase.from('sales').select('amount, type, created_at, products(name,emoji), clients(name)').is('cancelled_at', null).in('type', ['cash', 'dette']).order('created_at', { ascending: false }).limit(5),
       supabase.from('products').select('id, stock, name, emoji').order('stock', { ascending: true }).limit(10),
     ])
 

@@ -42,6 +42,13 @@ export default function SaleModal({ product, onClose, onSuccess }) {
   // NOUVEAU : Vérification si le cash reçu est insuffisant (uniquement si le champ n'est pas vide)
   const cashReceivedIsInsufficient = paymentType === 'cash' && cashReceived !== '' && received < amountDue
 
+  // Ce que CETTE vente change chez le client — calculé ici (pas dans handleSubmit) pour être
+  // enregistré tel quel sur la ligne "sales". C'est la seule source fiable permettant d'annuler
+  // la vente plus tard sans perte d'information (dette ajoutée / avoir consommé / avoir généré).
+  const debtAdded = paymentType === 'dette' ? amountDue : 0
+  const newCreditFromChange = (paymentType === 'cash' && saveAsCredit && changeDue > 0) ? changeDue : 0
+  const creditDelta = round2(newCreditFromChange - appliedCredit)
+
   // Filtrer les clients selon la recherche
   const filteredClients = clients.filter(c =>
       c.name.toLowerCase().includes(clientSearch.toLowerCase())
@@ -66,15 +73,37 @@ export default function SaleModal({ product, onClose, onSuccess }) {
       if (batchError) throw batchError
       const activeBatch = batches?.[0] ?? null
 
+      // On détermine dès maintenant si CETTE vente épuise le lot, pour l'enregistrer
+      // sur la ligne "sales" (nécessaire pour pouvoir annuler proprement plus tard)
+      let willExhaustBatch = false
+      if (activeBatch) {
+        const pastDeltasSum = activeBatch.stock_movements?.reduce((sum, mov) => sum + mov.delta, 0) || 0
+        const batchRemainingStock = activeBatch.received_qty + pastDeltasSum - qty
+        willExhaustBatch = batchRemainingStock <= 0
+      }
+
       // 2. Enregistrer la vente
-      const { error: saleError } = await supabase.from('sales').insert({
-        product_id: product.id,
-        client_id: selectedClient?.id ?? null,
-        user_id: user?.id ?? null,
-        qty,
-        amount: total,
-        type: paymentType,
-      })
+      // On trace explicitement ce que cette vente change chez le client (debt_added,
+      // credit_used, credit_created) et sur le stock (batch_id, batch_was_exhausted).
+      // amount seul (net de l'avoir) ne suffit pas à annuler la vente sans perte d'information —
+      // ces colonnes sont la source de vérité utilisée par VentesView.handleConfirmCancel.
+      const { data: insertedSale, error: saleError } = await supabase
+          .from('sales')
+          .insert({
+            product_id: product.id,
+            client_id: selectedClient?.id ?? null,
+            user_id: user?.id ?? null,
+            qty,
+            amount: amountDue,
+            type: paymentType,
+            debt_added: debtAdded,
+            credit_used: appliedCredit,
+            credit_created: newCreditFromChange,
+            batch_id: activeBatch?.id ?? null,
+            batch_was_exhausted: willExhaustBatch,
+          })
+          .select()
+          .single()
       if (saleError) throw saleError
 
       // 3. Décrémenter le stock global du produit
@@ -85,49 +114,41 @@ export default function SaleModal({ product, onClose, onSuccess }) {
           .eq('id', product.id)
       if (stockError) throw stockError
 
-      // 4. Enregistrer le mouvement de stock (batch_id null si aucun batch actif)
+      // 4. Enregistrer le mouvement de stock, lié à la vente (sale_id) pour traçabilité
       const { error: movError } = await supabase.from('stock_movements').insert({
         product_id: product.id,
         batch_id: activeBatch?.id ?? null,
+        sale_id: insertedSale?.id ?? null,
         delta: -qty,
         reason: 'vente',
       })
       if (movError) console.error('Erreur mouvement:', movError)
 
       // 5. Si le BATCH SPÉCIFIQUE est maintenant épuisé, marquer exhausted_at + duration_days
-      if (activeBatch) {
-        // Somme des deltas passés sur ce lot précis
-        const pastDeltasSum = activeBatch.stock_movements?.reduce((sum, mov) => sum + mov.delta, 0) || 0
-        // Stock restant dans ce lot APRÈS la vente actuelle
-        const batchRemainingStock = activeBatch.received_qty + pastDeltasSum - qty
+      if (activeBatch && willExhaustBatch) {
+        const now = new Date()
+        const receivedAt = new Date(activeBatch.received_at)
+        const durationDays = Math.round((now - receivedAt) / (1000 * 60 * 60 * 24))
 
-        if (batchRemainingStock <= 0) {
-          const now = new Date()
-          const receivedAt = new Date(activeBatch.received_at)
-          const durationDays = Math.round((now - receivedAt) / (1000 * 60 * 60 * 24))
-
-          const { error: batchUpdateError } = await supabase
-              .from('stock_batches')
-              .update({
-                exhausted_at: now.toISOString(),
-                duration_days: durationDays,
-              })
-              .eq('id', activeBatch.id)
-          if (batchUpdateError) console.error('Erreur update batch:', batchUpdateError)
-        }
+        const { error: batchUpdateError } = await supabase
+            .from('stock_batches')
+            .update({
+              exhausted_at: now.toISOString(),
+              duration_days: durationDays,
+            })
+            .eq('id', activeBatch.id)
+        if (batchUpdateError) console.error('Erreur update batch:', batchUpdateError)
       }
 
       // 6. Si dette, incrémenter la dette du client
-      if (paymentType === 'dette' && selectedClient) {
+      if (debtAdded > 0 && selectedClient) {
         await supabase
             .from('clients')
-            .update({ debt: round2((selectedClient.debt ?? 0) + amountDue) })
+            .update({ debt: round2((selectedClient.debt ?? 0) + debtAdded) })
             .eq('id', selectedClient.id)
       }
 
       // 7. Mettre à jour l'avoir du client : consommation + éventuel nouvel avoir (monnaie non rendue)
-      const newCreditFromChange = (paymentType === 'cash' && saveAsCredit && changeDue > 0) ? changeDue : 0
-      const creditDelta = round2(newCreditFromChange - appliedCredit)
       if (selectedClient && creditDelta !== 0) {
         await supabase
             .from('clients')

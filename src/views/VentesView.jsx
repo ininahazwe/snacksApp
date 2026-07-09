@@ -24,7 +24,7 @@ export default function VentesView() {
   const fetchSales = async () => {
     const { data } = await supabase
         .from('sales')
-        .select('id, product_id, client_id, user_id, qty, amount, type, created_at, products(name, emoji, price, cost), clients(name)')
+        .select('id, product_id, client_id, user_id, qty, amount, type, created_at, debt_added, debt_repaid, credit_used, credit_created, cancelled_at, batch_id, batch_was_exhausted, products(name, emoji, price, cost), clients(name)')
         .order('created_at', { ascending: false })
     setSales(data ?? [])
     setLoading(false)
@@ -52,11 +52,16 @@ export default function VentesView() {
     const end = new Date(dateEnd + 'T23:59:59').toISOString()
 
     // Récupérer les ventes sur la période (avec cost du produit)
+    // On exclut les ventes annulées, et les lignes 'paiement'/'avoir' (ce sont des mouvements
+    // de solde client, pas du chiffre d'affaires — sinon un remboursement de dette se
+    // retrouvait compté une seconde fois comme "Credit sales").
     const { data: periodSales } = await supabase
         .from('sales')
         .select('id, product_id, qty, amount, type, products(name, emoji, price, cost)')
         .gte('created_at', start)
         .lte('created_at', end)
+        .is('cancelled_at', null)
+        .in('type', ['cash', 'dette'])
 
     if (!periodSales || periodSales.length === 0) {
       alert('Aucune vente sur cette période')
@@ -106,7 +111,15 @@ export default function VentesView() {
     return new Date(iso).toLocaleDateString('fr', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
   }
 
-  // Confirmer l'annulation d'une vente
+  // Confirmer l'annulation d'une vente (ou d'un paiement / usage d'avoir / conversion en avoir)
+  //
+  // Logique générique : on ne se fie plus à "amount" (ambigu selon le type et selon qu'un
+  // avoir a été appliqué), mais aux colonnes explicites debt_added / debt_repaid /
+  // credit_used / credit_created enregistrées au moment de la transaction. Défaire une
+  // transaction = appliquer l'inverse exact de ces 4 valeurs, quel que soit son type.
+  //
+  // La vente n'est plus supprimée (perte d'information) mais marquée cancelled_at :
+  // elle reste visible dans l'historique du client, barrée et taguée "Cancelled".
   const handleConfirmCancel = async () => {
     if (!saleToCancel) return
     setCancelling(true)
@@ -114,7 +127,7 @@ export default function VentesView() {
     const sale = saleToCancel
 
     try {
-      // 1. Restaurer le stock du produit
+      // 1. Restaurer le stock du produit (uniquement si la ligne correspond à un produit)
       if (sale.product_id) {
         const { data: product } = await supabase
             .from('products')
@@ -129,36 +142,48 @@ export default function VentesView() {
             .update({ stock: newStock })
             .eq('id', sale.product_id)
 
-        // 2. Journaliser le mouvement de stock
+        // 2. Journaliser le mouvement de stock inverse, lié à la vente annulée
         await supabase
             .from('stock_movements')
             .insert({
               product_id: sale.product_id,
+              batch_id: sale.batch_id ?? null,
+              sale_id: sale.id,
               delta: sale.qty,
               reason: 'Sale cancelled',
             })
+
+        // 3. Si CETTE vente précise avait épuisé un lot, on le rouvre
+        if (sale.batch_was_exhausted && sale.batch_id) {
+          await supabase
+              .from('stock_batches')
+              .update({ exhausted_at: null, duration_days: null })
+              .eq('id', sale.batch_id)
+        }
       }
 
-      // 3. Si vente à crédit, réduire la dette du client
-      if (sale.type === 'dette' && sale.client_id) {
+      // 4. Défaire l'effet exact de la transaction sur la dette et l'avoir du client
+      const hasBalanceEffect = (sale.debt_added || sale.debt_repaid || sale.credit_used || sale.credit_created)
+      if (sale.client_id && hasBalanceEffect) {
         const { data: client } = await supabase
             .from('clients')
-            .select('debt')
+            .select('debt, credit')
             .eq('id', sale.client_id)
             .single()
 
-        const newDebt = round2(Math.max(0, (client?.debt ?? 0) - sale.amount))
+        const newDebt = round2(Math.max(0, (client?.debt ?? 0) - (sale.debt_added ?? 0) + (sale.debt_repaid ?? 0)))
+        const newCredit = round2(Math.max(0, (client?.credit ?? 0) - (sale.credit_created ?? 0) + (sale.credit_used ?? 0)))
 
         await supabase
             .from('clients')
-            .update({ debt: newDebt })
+            .update({ debt: newDebt, credit: newCredit })
             .eq('id', sale.client_id)
       }
 
-      // 4. Supprimer la vente
+      // 5. Marquer la transaction comme annulée (soft delete) — elle reste dans l'historique
       await supabase
           .from('sales')
-          .delete()
+          .update({ cancelled_at: new Date().toISOString() })
           .eq('id', sale.id)
 
       setSaleToCancel(null)
@@ -274,7 +299,8 @@ export default function VentesView() {
             {filter === 'toutes' ? 'Total · All Sales' : filter === 'payees' ? 'Total · Paid' : 'Total · Credit'}
           </div>
           <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '32px', color: 'white', letterSpacing: '-0.5px' }}>
-            {formatPrice(filtered.reduce((sum, s) => sum + s.amount, 0))} <span style={{ fontSize: '18px' }}>GH₵</span>
+            {/* On exclut les ventes annulées et les lignes paiement/avoir (mouvements de solde, pas du CA) */}
+            {formatPrice(filtered.filter(s => !s.cancelled_at && (s.type === 'cash' || s.type === 'dette')).reduce((sum, s) => sum + s.amount, 0))} <span style={{ fontSize: '18px' }}>GH₵</span>
           </div>
           <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginTop: '6px' }}>
             {filtered.length} transaction{filtered.length !== 1 ? 's' : ''}
@@ -288,48 +314,70 @@ export default function VentesView() {
             </div>
         ) : (
             <div style={{ background: 'white', borderRadius: '18px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)', overflow: 'hidden', marginBottom: hasMore ? '12px' : '24px' }}>
-              {visibleSales.map((s, i) => (
-                  <div key={s.id} style={{ ...saleRowStyles, borderBottom: i < visibleSales.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                    <div style={{ width: '34px', height: '34px', borderRadius: '9px', background: '#F5F5F5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', flexShrink: 0 }}>
-                      {s.products?.emoji ?? '🍬'}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '13px', fontWeight: '500', color: '#1A1A1A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {s.products?.name ?? '—'}
+              {visibleSales.map((s, i) => {
+                const isCancelled = !!s.cancelled_at
+                const productName = s.type === 'paiement'
+                    ? (s.credit_used > 0 ? 'Debt payment (store credit)' : 'Debt payment')
+                    : s.type === 'avoir'
+                        ? 'Store credit added'
+                        : (s.products?.name ?? '—')
+                const emoji = s.type === 'paiement' ? '💳' : s.type === 'avoir' ? '💰' : (s.products?.emoji ?? '🍬')
+                const badge = s.type === 'paiement'
+                    ? { style: badgeCashStyles, text: 'Payment' }
+                    : s.type === 'avoir'
+                        ? { style: badgeCashStyles, text: 'Store credit' }
+                        : s.type === 'cash'
+                            ? { style: badgeCashStyles, text: 'Paid' }
+                            : { style: badgeDetteStyles, text: 'Credit' }
+                return (
+                    <div key={s.id} style={{ ...saleRowStyles, borderBottom: i < visibleSales.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none', opacity: isCancelled ? 0.45 : 1 }}>
+                      <div style={{ width: '34px', height: '34px', borderRadius: '9px', background: '#F5F5F5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', flexShrink: 0 }}>
+                        {emoji}
                       </div>
-                      <div style={{ fontSize: '11px', color: '#BBB', marginTop: '1px' }}>
-                        {s.clients?.name ?? 'Unknown'} · {formatDate(s.created_at)} · x{s.qty}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '13px', fontWeight: '500', color: '#1A1A1A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: isCancelled ? 'line-through' : 'none' }}>
+                          {productName}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#BBB', marginTop: '1px' }}>
+                          {s.clients?.name ?? 'Unknown'} · {formatDate(s.created_at)}{s.qty > 0 ? ` · x${s.qty}` : ''}
+                        </div>
+                        {s.user_id && usersById[s.user_id] && (
+                            <div style={{ fontSize: '10px', color: '#CCC', marginTop: '1px' }}>
+                              👤 {usersById[s.user_id]}
+                            </div>
+                        )}
                       </div>
-                      {s.user_id && usersById[s.user_id] && (
-                          <div style={{ fontSize: '10px', color: '#CCC', marginTop: '1px' }}>
-                            👤 {usersById[s.user_id]}
-                          </div>
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ fontSize: '13px', fontWeight: '600', color: '#1A1A1A', textDecoration: isCancelled ? 'line-through' : 'none' }}>{s.amount?.toLocaleString()} GH₵</div>
+                        {isCancelled ? (
+                            <span style={badgeCancelledStyles}>Cancelled</span>
+                        ) : (
+                            <span style={badge.style}>{badge.text}</span>
+                        )}
+                      </div>
+                      {isCancelled ? (
+                          <div style={{ width: '27px', flexShrink: 0 }} />
+                      ) : (
+                          <button
+                              onClick={() => setSaleToCancel(s)}
+                              title="Cancel sale"
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: '#BBB',
+                                fontSize: '15px',
+                                cursor: 'pointer',
+                                padding: '6px',
+                                flexShrink: 0,
+                                lineHeight: 1,
+                              }}
+                          >
+                            🗑️
+                          </button>
                       )}
                     </div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontSize: '13px', fontWeight: '600', color: '#1A1A1A' }}>{s.amount?.toLocaleString()} GH₵</div>
-                      <span style={s.type === 'cash' ? badgeCashStyles : badgeDetteStyles}>
-                  {s.type === 'cash' ? 'Paid' : 'Credit'}
-                </span>
-                    </div>
-                    <button
-                        onClick={() => setSaleToCancel(s)}
-                        title="Cancel sale"
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#BBB',
-                          fontSize: '15px',
-                          cursor: 'pointer',
-                          padding: '6px',
-                          flexShrink: 0,
-                          lineHeight: 1,
-                        }}
-                    >
-                      🗑️
-                    </button>
-                  </div>
-              ))}
+                )
+              })}
             </div>
         )}
 
@@ -481,11 +529,13 @@ export default function VentesView() {
                   Cancel this sale?
                 </div>
                 <div style={{ fontSize: '13px', color: '#999', marginBottom: '16px', lineHeight: '1.5' }}>
-                  {saleToCancel.products?.name ?? 'Product'} · x{saleToCancel.qty} · {saleToCancel.amount?.toLocaleString()} GH₵
+                  {saleToCancel.type === 'paiement' || saleToCancel.type === 'avoir'
+                      ? `${saleToCancel.clients?.name ?? 'Client'} · ${saleToCancel.amount?.toLocaleString()} GH₵`
+                      : `${saleToCancel.products?.name ?? 'Product'} · x${saleToCancel.qty} · ${saleToCancel.amount?.toLocaleString()} GH₵`}
                   <br />
-                  Stock will be restored
-                  {saleToCancel.type === 'dette' ? ' and the client\'s debt will be reduced accordingly.' : '.'}
-                  {' '}This cannot be undone.
+                  {saleToCancel.product_id ? 'Stock will be restored. ' : ''}
+                  {saleToCancel.client_id ? "The client's debt and store credit will be reversed to exactly what they were before this transaction. " : ''}
+                  The record stays in the history, marked as cancelled.
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
                   <button
@@ -536,3 +586,4 @@ export default function VentesView() {
 const saleRowStyles = { display: 'flex', alignItems: 'center', padding: '12px 16px', gap: '12px' }
 const badgeCashStyles = { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#E8F5EC', color: '#2E7D42', marginTop: '2px' }
 const badgeDetteStyles = { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#FFF0E8', color: '#C45000', marginTop: '2px' }
+const badgeCancelledStyles = { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#F0F0F0', color: '#999', marginTop: '2px' }

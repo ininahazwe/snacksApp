@@ -83,6 +83,7 @@ export default function ClientsView() {
       qty: 0,
       amount: montantApplique,
       type: 'paiement',
+      debt_repaid: montantApplique,
     })
     const clientMaj = { ...selectedClient, debt: nouvelleDette }
     setSelectedClient(clientMaj)
@@ -109,11 +110,22 @@ export default function ClientsView() {
         .from('clients')
         .update({ credit: nouvelAvoir })
         .eq('id', selectedClient.id)
+    // Tracer la conversion dans l'historique — sans cette ligne, l'avoir apparaissait
+    // "de nulle part" et une annulation ultérieure n'aurait rien à défaire.
+    await supabase.from('sales').insert({
+      client_id: selectedClient.id,
+      product_id: null,
+      qty: 0,
+      amount: surplusPaiement,
+      type: 'avoir',
+      credit_created: surplusPaiement,
+    })
     const clientMaj = { ...selectedClient, credit: nouvelAvoir }
     setSelectedClient(clientMaj)
     setClients(cs => cs.map(c => c.id === clientMaj.id ? clientMaj : c))
     setConvertingSurplus(false)
     setSurplusPaiement(null)
+    await rafraichirHistorique(selectedClient.id)
   }
 
   // ── Utiliser l'avoir pour solder (tout ou partie) la dette ──────────────────
@@ -136,6 +148,8 @@ export default function ClientsView() {
       qty: 0,
       amount: montantUtilise,
       type: 'paiement',
+      debt_repaid: montantUtilise,
+      credit_used: montantUtilise,
     })
     const clientMaj = { ...selectedClient, debt: nouvelleDette, credit: nouvelAvoir }
     setSelectedClient(clientMaj)
@@ -415,27 +429,49 @@ export default function ClientsView() {
                     <div style={s.emptySmall}>No purchases yet</div>
                 ) : (
                     <div style={s.historiqueList}>
-                      {historique.map((v, i) => (
-                          <div key={v.id} style={{ ...s.historiqueRow, borderBottom: i < historique.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                            <div style={s.histEmoji}>{v.type === 'paiement' ? '💳' : (v.products?.emoji ?? '🍬')}</div>
-                            <div style={{ flex: 1 }}>
-                              <div style={s.histNom}>{v.type === 'paiement' ? 'Debt payment' : (v.products?.name ?? '—')}</div>
-                              <div style={s.histDate}>{formatDate(v.created_at)}{v.type !== 'paiement' ? ` · ×${v.qty}` : ''}</div>
-                            </div>
-                            <div style={{ textAlign: 'right' }}>
-                              <div style={{ ...s.histMontant, color: v.type === 'paiement' ? '#2E7D42' : '#1A1A1A' }}>
-                                {v.type === 'paiement' ? '−' : ''}{v.amount?.toLocaleString()} GH₵
+                      {historique.map((v, i) => {
+                        const isCancelled = !!v.cancelled_at
+                        const emoji = v.type === 'paiement' ? '💳' : v.type === 'avoir' ? '💰' : (v.products?.emoji ?? '🍬')
+                        const label = v.type === 'paiement'
+                            ? (v.credit_used > 0 ? 'Debt payment (store credit)' : 'Debt payment')
+                            : v.type === 'avoir'
+                                ? 'Store credit added'
+                                : (v.products?.name ?? '—')
+                        const isNegative = v.type === 'paiement'
+                        const badge = v.type === 'paiement'
+                            ? { style: s.badgeCash, text: 'Payment' }
+                            : v.type === 'avoir'
+                                ? { style: s.badgeCash, text: 'Store credit' }
+                                : v.type === 'cash'
+                                    ? { style: s.badgeCash, text: 'Paid' }
+                                    : { style: s.badgeDette, text: 'Credit' }
+                        return (
+                            <div
+                                key={v.id}
+                                style={{
+                                  ...s.historiqueRow,
+                                  borderBottom: i < historique.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none',
+                                  opacity: isCancelled ? 0.45 : 1,
+                                }}
+                            >
+                              <div style={s.histEmoji}>{emoji}</div>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ ...s.histNom, textDecoration: isCancelled ? 'line-through' : 'none' }}>{label}</div>
+                                <div style={s.histDate}>{formatDate(v.created_at)}{v.qty > 0 ? ` · ×${v.qty}` : ''}</div>
                               </div>
-                              {v.type === 'paiement' ? (
-                                  <span style={s.badgeCash}>Payment</span>
-                              ) : (
-                                  <span style={v.type === 'cash' ? s.badgeCash : s.badgeDette}>
-                            {v.type === 'cash' ? 'Paid' : 'Credit'}
-                          </span>
-                              )}
+                              <div style={{ textAlign: 'right' }}>
+                                <div style={{ ...s.histMontant, color: isNegative ? '#2E7D42' : '#1A1A1A', textDecoration: isCancelled ? 'line-through' : 'none' }}>
+                                  {isNegative ? '−' : ''}{v.amount?.toLocaleString()} GH₵
+                                </div>
+                                {isCancelled ? (
+                                    <span style={s.badgeCancelled}>Cancelled</span>
+                                ) : (
+                                    <span style={badge.style}>{badge.text}</span>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                      ))}
+                        )
+                      })}
                     </div>
                 )}
 
@@ -549,6 +585,7 @@ const s = {
   histMontant: { fontSize: '13px', fontWeight: '600', color: '#1A1A1A' },
   badgeCash: { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#E8F5EC', color: '#2E7D42' },
   badgeDette: { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#FFF0E8', color: '#C45000' },
+  badgeCancelled: { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#F0F0F0', color: '#999' },
   emptySmall: { fontSize: '13px', color: '#BBB', padding: '16px 0' },
   fieldGroup: { marginBottom: '16px' },
   input: { width: '100%', padding: '13px 16px', borderRadius: '12px', border: '1.5px solid #EBEBEB', fontSize: '15px', fontFamily: "'DM Sans', sans-serif", color: '#1A1A1A', outline: 'none', boxSizing: 'border-box' },
