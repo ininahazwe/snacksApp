@@ -16,6 +16,8 @@ import SaleModal from './components/SaleModal'
 import NewProductModal from './components/NewProductModal'
 import Toast from './components/Toast'
 import { supabase } from './lib/supabase'
+import { getCachedProducts } from './lib/offlineCache'
+import { useOfflineSync } from './hooks/useOfflineSync'
 import { st } from './styles/styles.js'
 
 // Navigation : vendeur voit seulement Sales + Products
@@ -58,6 +60,8 @@ function AppLayout() {
   const [toast,        setToast]        = useState(null)
   const [scanPulse,    setScanPulse]    = useState(false)
 
+  const { pendingCount, syncing, syncNow } = useOfflineSync()
+
   const showToast = (msg) => {
     setToast(msg)
     setTimeout(() => setToast(null), 3000)
@@ -67,6 +71,17 @@ function AppLayout() {
     setShowScanner(false)
     setScanPulse(true)
     setTimeout(() => setScanPulse(false), 600)
+
+    if (!navigator.onLine) {
+      // Hors-ligne : on ne peut interroger que le catalogue mis en cache.
+      // On ne propose jamais de créer un nouveau produit hors-ligne, pour
+      // éviter un doublon si le code existe déjà côté serveur.
+      const cached = getCachedProducts().find(p => p.barcode === barcode)
+      if (cached) setSaleProduct(cached)
+      else showToast('Unknown barcode — connect to internet to add a new product')
+      return
+    }
+
     const { data } = await supabase.from('products').select('*').eq('barcode', barcode).single()
     if (data) setSaleProduct(data)
     else setNewBarcode(barcode)
@@ -74,7 +89,9 @@ function AppLayout() {
 
   const handleProductTap    = (product) => setSaleProduct(product)
   const handleProductCreated = (product) => { setNewBarcode(null); showToast(`✓ "${product.name}" created`); setSaleProduct(product) }
-  const handleSaleSuccess   = (msg)     => { setSaleProduct(null); showToast(msg) }
+  // Ne ferme plus le modal ici : SaleModal affiche désormais un écran de
+  // confirmation avec le reçu, et se ferme lui-même via onClose (bouton "Done").
+  const handleSaleSuccess   = (msg)     => { showToast(msg) }
 
   // Vendeur atterrit sur /ventes par défaut
   const defaultPath = estGerant ? '/' : '/ventes'
@@ -84,7 +101,7 @@ function AppLayout() {
 
   return (
       <div style={st.app}>
-        <OfflineBanner />
+        <OfflineBanner pendingCount={pendingCount} syncing={syncing} onSyncNow={syncNow} />
 
         {/* Header */}
         <div style={st.header}>

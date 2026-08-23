@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { formatPrice, round2 } from '../lib/format'
+import { printReceipt } from '../lib/receipt'
+import { enqueueSale } from '../lib/offlineQueue'
+import { cacheClients, getCachedClients, cacheProducts, getCachedProducts, notifyCacheUpdated } from '../lib/offlineCache'
 
 export default function SaleModal({ product, onClose, onSuccess }) {
   const { user } = useAuth()
@@ -15,18 +18,41 @@ export default function SaleModal({ product, onClose, onSuccess }) {
   const [cashReceived, setCashReceived] = useState('')
   const [saveAsCredit, setSaveAsCredit] = useState(false)
   const [useCredit, setUseCredit] = useState(false)
+  const [receiptData, setReceiptData] = useState(null)
+
+  // Réduction (produit abîmé/cassé, etc.) : prix de vente différent du prix
+  // catalogue pour cette vente uniquement — le prix du produit n'est pas modifié.
+  const [isDiscounted, setIsDiscounted] = useState(false)
+  const [discountedPrice, setDiscountedPrice] = useState('')
+  const [discountReason, setDiscountReason] = useState('')
 
   useEffect(() => {
     fetchClients()
   }, [])
 
   const fetchClients = async () => {
+    if (!navigator.onLine) {
+      setClients(getCachedClients())
+      setLoadingClients(false)
+      return
+    }
     const { data } = await supabase.from('clients').select('*').order('name')
     setClients(data ?? [])
+    cacheClients(data ?? [])
     setLoadingClients(false)
   }
 
-  const total = round2(product.price * qty)
+  // Prix réduit : n'a d'effet que si activé, saisi, et strictement inférieur
+  // au prix catalogue (sinon ce n'est pas une réduction).
+  const parsedDiscountPrice = parseFloat(discountedPrice)
+  const discountInvalid = isDiscounted && (
+      discountedPrice === '' || isNaN(parsedDiscountPrice) || parsedDiscountPrice < 0 || parsedDiscountPrice >= product.price
+  )
+  const hasValidDiscount = isDiscounted && !discountInvalid
+  const effectiveUnitPrice = hasValidDiscount ? parsedDiscountPrice : product.price
+
+  const total = round2(effectiveUnitPrice * qty)
+  const originalTotal = round2(product.price * qty)
 
   // Avoir disponible du client sélectionné
   const clientCredit = selectedClient?.credit ?? 0
@@ -42,13 +68,82 @@ export default function SaleModal({ product, onClose, onSuccess }) {
   // NOUVEAU : Vérification si le cash reçu est insuffisant (uniquement si le champ n'est pas vide)
   const cashReceivedIsInsufficient = paymentType === 'cash' && cashReceived !== '' && received < amountDue
 
+  // Ne jamais vendre plus que le stock disponible (en ligne ou hors-ligne) : le stock deviendrait négatif
+  const insufficientStock = qty > (product.stock ?? 0)
+
   // Filtrer les clients selon la recherche
   const filteredClients = clients.filter(c =>
       c.name.toLowerCase().includes(clientSearch.toLowerCase())
   )
 
   const handleSubmit = async () => {
+    // Filet de sécurité : le bouton est déjà désactivé dans ce cas, mais on
+    // bloque aussi ici pour ne jamais faire passer le stock sous zéro.
+    if (insufficientStock) {
+      alert(`Only ${product.stock} unit${product.stock !== 1 ? 's' : ''} in stock — reduce the quantity.`)
+      return
+    }
+
     setLoading(true)
+    const newCreditFromChange = (paymentType === 'cash' && saveAsCredit && changeDue > 0) ? changeDue : 0
+
+    // ── Hors-ligne : on ne peut pas parler à Supabase, la vente est mise en
+    // file d'attente locale et rejouée automatiquement au retour du réseau
+    // (voir src/lib/offlineQueue.js). Le stock/la dette/l'avoir affichés
+    // localement sont mis à jour de façon optimiste en attendant la synchro.
+    if (!navigator.onLine) {
+      try {
+        enqueueSale({
+          product_id: product.id,
+          product_name: product.name,
+          client_id: selectedClient?.id ?? null,
+          client_name: selectedClient?.name ?? null,
+          user_id: user?.id ?? null,
+          qty,
+          amount: total,
+          amountDue,
+          type: paymentType,
+          appliedCredit,
+          newCreditFromChange,
+          original_amount: hasValidDiscount ? originalTotal : null,
+          discount_reason: hasValidDiscount ? (discountReason.trim() || null) : null,
+        })
+
+        const cachedProducts = getCachedProducts().map(p =>
+            p.id === product.id ? { ...p, stock: p.stock - qty } : p)
+        cacheProducts(cachedProducts)
+
+        if (selectedClient) {
+          const creditDelta = round2(newCreditFromChange - appliedCredit)
+          const cachedClients = getCachedClients().map(c => {
+            if (c.id !== selectedClient.id) return c
+            const updated = { ...c }
+            if (paymentType === 'dette') updated.debt = round2((c.debt ?? 0) + amountDue)
+            if (creditDelta !== 0) updated.credit = round2((c.credit ?? 0) + creditDelta)
+            return updated
+          })
+          cacheClients(cachedClients)
+        }
+        notifyCacheUpdated()
+
+        setReceiptData({
+          productName: product.name, emoji: product.emoji, qty, unitPrice: effectiveUnitPrice,
+          amount: total, type: paymentType, clientName: selectedClient?.name ?? null,
+          appliedCredit, changeDue: paymentType === 'cash' ? changeDue : 0,
+          newCredit: newCreditFromChange, created_at: new Date().toISOString(), offline: true,
+          originalAmount: hasValidDiscount ? originalTotal : null,
+          discountReason: hasValidDiscount ? (discountReason.trim() || null) : null,
+        })
+        onSuccess(`📴 Sale saved offline — ${formatPrice(total)} GH₵ (will sync automatically)`)
+      } catch (err) {
+        console.error('Erreur mise en file hors-ligne:', err)
+        alert('Error while saving offline. Please try again.')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
     try {
       // 1. Récupérer le batch ACTIF (le plus ancien non épuisé) - FIFO
       // On récupère aussi ses mouvements pour calculer dynamiquement son stock restant réel
@@ -66,6 +161,17 @@ export default function SaleModal({ product, onClose, onSuccess }) {
       if (batchError) throw batchError
       const activeBatch = batches?.[0] ?? null
 
+      // Déterminer AVANT d'insérer la vente si elle va épuiser ce lot précis,
+      // pour pouvoir l'enregistrer directement sur la ligne `sales`
+      // (batch_id / batch_was_exhausted) — c'est ce qui permettra à une
+      // éventuelle annulation de restaurer le bon lot plus tard.
+      let willExhaustBatch = false
+      if (activeBatch) {
+        const pastDeltasSum = activeBatch.stock_movements?.reduce((sum, mov) => sum + mov.delta, 0) || 0
+        const batchRemainingStock = activeBatch.received_qty + pastDeltasSum - qty
+        willExhaustBatch = batchRemainingStock <= 0
+      }
+
       // 2. Enregistrer la vente
       const { error: saleError } = await supabase.from('sales').insert({
         product_id: product.id,
@@ -74,6 +180,10 @@ export default function SaleModal({ product, onClose, onSuccess }) {
         qty,
         amount: total,
         type: paymentType,
+        batch_id: activeBatch?.id ?? null,
+        batch_was_exhausted: willExhaustBatch,
+        original_amount: hasValidDiscount ? originalTotal : null,
+        discount_reason: hasValidDiscount ? (discountReason.trim() || null) : null,
       })
       if (saleError) throw saleError
 
@@ -94,27 +204,20 @@ export default function SaleModal({ product, onClose, onSuccess }) {
       })
       if (movError) console.error('Erreur mouvement:', movError)
 
-      // 5. Si le BATCH SPÉCIFIQUE est maintenant épuisé, marquer exhausted_at + duration_days
-      if (activeBatch) {
-        // Somme des deltas passés sur ce lot précis
-        const pastDeltasSum = activeBatch.stock_movements?.reduce((sum, mov) => sum + mov.delta, 0) || 0
-        // Stock restant dans ce lot APRÈS la vente actuelle
-        const batchRemainingStock = activeBatch.received_qty + pastDeltasSum - qty
+      // 5. Si cette vente épuise le lot (calculé plus haut), marquer exhausted_at + duration_days
+      if (activeBatch && willExhaustBatch) {
+        const now = new Date()
+        const receivedAt = new Date(activeBatch.received_at)
+        const durationDays = Math.round((now - receivedAt) / (1000 * 60 * 60 * 24))
 
-        if (batchRemainingStock <= 0) {
-          const now = new Date()
-          const receivedAt = new Date(activeBatch.received_at)
-          const durationDays = Math.round((now - receivedAt) / (1000 * 60 * 60 * 24))
-
-          const { error: batchUpdateError } = await supabase
-              .from('stock_batches')
-              .update({
-                exhausted_at: now.toISOString(),
-                duration_days: durationDays,
-              })
-              .eq('id', activeBatch.id)
-          if (batchUpdateError) console.error('Erreur update batch:', batchUpdateError)
-        }
+        const { error: batchUpdateError } = await supabase
+            .from('stock_batches')
+            .update({
+              exhausted_at: now.toISOString(),
+              duration_days: durationDays,
+            })
+            .eq('id', activeBatch.id)
+        if (batchUpdateError) console.error('Erreur update batch:', batchUpdateError)
       }
 
       // 6. Si dette, incrémenter la dette du client
@@ -126,7 +229,6 @@ export default function SaleModal({ product, onClose, onSuccess }) {
       }
 
       // 7. Mettre à jour l'avoir du client : consommation + éventuel nouvel avoir (monnaie non rendue)
-      const newCreditFromChange = (paymentType === 'cash' && saveAsCredit && changeDue > 0) ? changeDue : 0
       const creditDelta = round2(newCreditFromChange - appliedCredit)
       if (selectedClient && creditDelta !== 0) {
         await supabase
@@ -137,6 +239,14 @@ export default function SaleModal({ product, onClose, onSuccess }) {
 
       const usedMsg = appliedCredit > 0 ? ` · Credit used −${formatPrice(appliedCredit)} GH₵` : ''
       const newMsg = (newCreditFromChange > 0 && selectedClient) ? ` · Credit +${formatPrice(newCreditFromChange)} GH₵` : ''
+      setReceiptData({
+        productName: product.name, emoji: product.emoji, qty, unitPrice: effectiveUnitPrice,
+        amount: total, type: paymentType, clientName: selectedClient?.name ?? null,
+        appliedCredit, changeDue: paymentType === 'cash' ? changeDue : 0,
+        newCredit: newCreditFromChange, created_at: new Date().toISOString(), offline: false,
+        originalAmount: hasValidDiscount ? originalTotal : null,
+        discountReason: hasValidDiscount ? (discountReason.trim() || null) : null,
+      })
       onSuccess(`✓ Sale recorded — ${formatPrice(total)} GH₵${usedMsg}${newMsg}`)
     } catch (err) {
       console.error('Erreur vente:', err)
@@ -144,6 +254,59 @@ export default function SaleModal({ product, onClose, onSuccess }) {
     } finally {
       setLoading(false)
     }
+  }
+
+  // Écran de confirmation affiché après une vente réussie (en ligne ou hors-ligne),
+  // avec option d'impression du reçu. Le modal ne se ferme que lorsque
+  // l'utilisateur clique "Done" (appel de onClose fourni par App.jsx).
+  if (receiptData) {
+    return (
+        <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+          <div style={styles.modal}>
+            <div style={styles.handle} />
+            <div style={{ textAlign: 'center', padding: '4px 0 20px' }}>
+              <div style={{ fontSize: '40px' }}>{receiptData.offline ? '📴' : '✅'}</div>
+              <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '20px', color: '#1A1A1A', marginTop: '8px' }}>
+                {receiptData.offline ? 'Sale saved offline' : 'Sale recorded'}
+              </div>
+              {receiptData.offline && (
+                  <div style={{ fontSize: '12.5px', color: '#C45000', marginTop: '6px' }}>
+                    Will sync automatically once back online
+                  </div>
+              )}
+            </div>
+
+            <div style={{ background: '#F9F9F9', borderRadius: '14px', padding: '16px', marginBottom: '20px', fontSize: '13px', color: '#1A1A1A' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span>{receiptData.emoji} {receiptData.productName} × {receiptData.qty}</span>
+                <span style={{ textAlign: 'right' }}>
+                  {receiptData.originalAmount != null && (
+                      <div style={{ fontSize: '11px', color: '#BBB', textDecoration: 'line-through' }}>
+                        {formatPrice(receiptData.originalAmount)} GH₵
+                      </div>
+                  )}
+                  <span style={{ fontWeight: '600' }}>{formatPrice(receiptData.amount)} GH₵</span>
+                </span>
+              </div>
+              {receiptData.originalAmount != null && (
+                  <div style={{ color: '#C45000', fontSize: '11.5px', marginBottom: '4px' }}>
+                    🏷️ Discounted{receiptData.discountReason ? ` — ${receiptData.discountReason}` : ''}
+                  </div>
+              )}
+              {receiptData.clientName && (
+                  <div style={{ color: '#999', fontSize: '12px' }}>Client: {receiptData.clientName}</div>
+              )}
+            </div>
+
+            <button style={{ ...styles.submitBtn, marginBottom: '10px' }} onClick={() => printReceipt(receiptData)}>
+              🖨️ Print receipt
+            </button>
+            <button style={{ ...styles.submitBtn, background: '#F5F5F5', color: '#1A1A1A' }} onClick={onClose}>
+              Done
+            </button>
+          </div>
+        </div>
+    )
   }
 
   return (
@@ -170,6 +333,10 @@ export default function SaleModal({ product, onClose, onSuccess }) {
               <span style={styles.qtyValue}>{qty}</span>
               <button style={styles.qtyBtn} onClick={() => setQty(q => q + 1)}>+</button>
             </div>
+            <div style={{ fontSize: '11.5px', color: '#BBB', marginTop: '6px' }}>{product.stock ?? 0} in stock</div>
+            {insufficientStock && (
+                <div style={styles.warning}>⚠ Only {product.stock ?? 0} unit{(product.stock ?? 0) !== 1 ? 's' : ''} in stock</div>
+            )}
           </div>
 
           {/* Client */}
@@ -255,6 +422,58 @@ export default function SaleModal({ product, onClose, onSuccess }) {
             </div>
             {paymentType === 'dette' && !selectedClient && (
                 <div style={styles.warning}>⚠ Select a client to record a credit sale</div>
+            )}
+          </div>
+
+          {/* Réduction (produit abîmé/cassé, etc.) */}
+          <div style={styles.fieldGroup}>
+            <div style={styles.fieldLabel}>Discount</div>
+            <div
+                style={{
+                  ...styles.creditToggle,
+                  marginTop: 0,
+                  borderColor: isDiscounted ? '#C45000' : '#EBEBEB',
+                  background: isDiscounted ? '#FFF5EE' : 'white',
+                }}
+                onClick={() => setIsDiscounted(v => !v)}
+            >
+              <div style={{
+                ...styles.checkCircle,
+                background: isDiscounted ? '#C45000' : 'transparent',
+                borderColor: isDiscounted ? '#C45000' : '#DDD',
+              }}>
+                {isDiscounted && (
+                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5">
+                      <path d="M2 6l3 3 5-5" />
+                    </svg>
+                )}
+              </div>
+              <span style={{ fontSize: '13px', fontWeight: '500', color: '#1A1A1A', flex: 1 }}>
+                Discounted item (e.g. broken/damaged)
+              </span>
+            </div>
+
+            {isDiscounted && (
+                <div style={{ marginTop: '10px' }}>
+                  <input
+                      style={styles.input}
+                      type="number"
+                      step="0.01"
+                      inputMode="decimal"
+                      placeholder={`New unit price (normally ${formatPrice(product.price)})`}
+                      value={discountedPrice}
+                      onChange={e => setDiscountedPrice(e.target.value)}
+                  />
+                  <input
+                      style={{ ...styles.input, marginTop: '8px' }}
+                      placeholder="Reason (optional) — e.g. broken biscuits"
+                      value={discountReason}
+                      onChange={e => setDiscountReason(e.target.value)}
+                  />
+                  {discountInvalid && (
+                      <div style={styles.warning}>⚠ Enter a new unit price, lower than {formatPrice(product.price)} GH₵</div>
+                  )}
+                </div>
             )}
           </div>
 
@@ -350,7 +569,12 @@ export default function SaleModal({ product, onClose, onSuccess }) {
           {/* Total */}
           <div style={styles.totalLine}>
             <span style={styles.totalLabel}>Total</span>
-            <span style={styles.totalValue}>{formatPrice(total)} GH₵</span>
+            <span style={{ textAlign: 'right' }}>
+              {hasValidDiscount && (
+                  <div style={styles.originalPriceStrike}>{formatPrice(originalTotal)} GH₵</div>
+              )}
+              <span style={styles.totalValue}>{formatPrice(total)} GH₵</span>
+            </span>
           </div>
 
           {appliedCredit > 0 && (
@@ -366,17 +590,17 @@ export default function SaleModal({ product, onClose, onSuccess }) {
               </div>
           )}
 
-          {/* Bouton de soumission mis à jour avec le blocage si montant insuffisant */}
+          {/* Bouton de soumission : bloqué si montant insuffisant, stock insuffisant OU réduction invalide */}
           <button
               style={{
                 ...styles.submitBtn,
-                opacity: (loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient) ? 0.5 : 1,
-                cursor: (loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient) ? 'not-allowed' : 'pointer',
+                opacity: (loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient || insufficientStock || discountInvalid) ? 0.5 : 1,
+                cursor: (loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient || insufficientStock || discountInvalid) ? 'not-allowed' : 'pointer',
               }}
               onClick={handleSubmit}
-              disabled={loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient}
+              disabled={loading || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient || insufficientStock || discountInvalid}
           >
-            {loading ? 'Saving…' : 'Record sale'}
+            {loading ? 'Saving…' : insufficientStock ? 'Not enough stock' : 'Record sale'}
           </button>
         </div>
       </div>
@@ -481,6 +705,9 @@ const styles = {
   totalValue: {
     fontFamily: "'DM Serif Display', serif",
     fontSize: '24px', color: '#1A1A1A',
+  },
+  originalPriceStrike: {
+    fontSize: '12px', color: '#BBB', textDecoration: 'line-through', marginBottom: '2px',
   },
   submitBtn: {
     width: '100%', padding: '16px',

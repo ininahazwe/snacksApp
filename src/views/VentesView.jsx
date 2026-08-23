@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { formatPrice, round2 } from '../lib/format'
+import { printReceipt } from '../lib/receipt'
+import { downloadCsv } from '../lib/exportCsv'
 
 export default function VentesView() {
   const [sales, setSales] = useState([])
@@ -14,17 +16,21 @@ export default function VentesView() {
   const [cancelling, setCancelling] = useState(false)
   const [usersById, setUsersById] = useState({})
   const [visibleCount, setVisibleCount] = useState(10)
+  const [showCancelled, setShowCancelled] = useState(false)
 
   useEffect(() => { fetchSales(); fetchUsers() }, [])
 
   // Revenir à 10 ventes affichées dès que le filtre ou la recherche change,
   // sinon "load more" garderait un nombre incohérent avec la nouvelle liste
-  useEffect(() => { setVisibleCount(10) }, [filter, search])
+  useEffect(() => { setVisibleCount(10) }, [filter, search, showCancelled])
 
   const fetchSales = async () => {
+    // On récupère aussi les ventes annulées (cancelled_at) : elles sont
+    // conservées en base (soft-delete) pour la traçabilité, et affichées à
+    // part sur demande plutôt que d'être définitivement supprimées.
     const { data } = await supabase
         .from('sales')
-        .select('id, product_id, client_id, user_id, qty, amount, type, created_at, products(name, emoji, price, cost), clients(name)')
+        .select('id, product_id, client_id, user_id, qty, amount, type, created_at, cancelled_at, batch_id, batch_was_exhausted, original_amount, discount_reason, products(name, emoji, price, cost), clients(name)')
         .order('created_at', { ascending: false })
     setSales(data ?? [])
     setLoading(false)
@@ -52,11 +58,13 @@ export default function VentesView() {
     const end = new Date(dateEnd + 'T23:59:59').toISOString()
 
     // Récupérer les ventes sur la période (avec cost du produit)
+    // Les ventes annulées ne comptent ni dans le revenu ni dans le profit.
     const { data: periodSales } = await supabase
         .from('sales')
         .select('id, product_id, qty, amount, type, products(name, emoji, price, cost)')
         .gte('created_at', start)
         .lte('created_at', end)
+        .is('cancelled_at', null)
 
     if (!periodSales || periodSales.length === 0) {
       alert('Aucune vente sur cette période')
@@ -129,14 +137,29 @@ export default function VentesView() {
             .update({ stock: newStock })
             .eq('id', sale.product_id)
 
-        // 2. Journaliser le mouvement de stock
+        // 2. Journaliser le mouvement de stock, RATTACHÉ AU LOT D'ORIGINE
+        // (sale.batch_id) et à la vente qu'on annule (sale_id) — sans ce
+        // rattachement, le décompte du lot resterait faux et un lot déjà
+        // épuisé ne pourrait jamais être "rouvert" ci-dessous.
         await supabase
             .from('stock_movements')
             .insert({
               product_id: sale.product_id,
+              batch_id: sale.batch_id ?? null,
+              sale_id: sale.id,
               delta: sale.qty,
               reason: 'Sale cancelled',
             })
+
+        // 3. Si cette vente avait épuisé son lot, le rouvrir : sinon le lot
+        // resterait marqué "exhausted" pour toujours malgré l'unité rendue,
+        // et le FIFO irait piocher dans le lot suivant au lieu du bon.
+        if (sale.batch_id && sale.batch_was_exhausted) {
+          await supabase
+              .from('stock_batches')
+              .update({ exhausted_at: null, duration_days: null })
+              .eq('id', sale.batch_id)
+        }
       }
 
       // 3. Si vente à crédit, réduire la dette du client
@@ -155,10 +178,13 @@ export default function VentesView() {
             .eq('id', sale.client_id)
       }
 
-      // 4. Supprimer la vente
+      // 4. Marquer la vente comme annulée (soft-delete) au lieu de la supprimer :
+      // on garde une trace d'audit complète plutôt que de faire disparaître
+      // la transaction. Le reste de l'app filtre cancelled_at pour ne pas
+      // compter ces ventes dans les totaux/le dashboard.
       await supabase
           .from('sales')
-          .delete()
+          .update({ cancelled_at: new Date().toISOString() })
           .eq('id', sale.id)
 
       setSaleToCancel(null)
@@ -171,8 +197,12 @@ export default function VentesView() {
     }
   }
 
+  // Base : ventes actives par défaut ; les annulées ne s'affichent que si
+  // showCancelled est activé, et ne comptent jamais dans les totaux.
+  const base = showCancelled ? sales : sales.filter(s => !s.cancelled_at)
+
   // Filtrer les ventes par type puis par recherche nominative
-  const filtered = sales
+  const filtered = base
       .filter(s => {
         if (filter === 'payees') return s.type === 'cash'
         if (filter === 'dettes') return s.type === 'dette'
@@ -187,8 +217,30 @@ export default function VentesView() {
         return productName.includes(q) || clientName.includes(q) || sellerEmail.includes(q)
       })
 
+  // Les totaux/compteurs n'incluent jamais les ventes annulées, même si
+  // showCancelled les fait apparaître dans la liste ci-dessous.
+  const filteredActive = filtered.filter(s => !s.cancelled_at)
+
   const visibleSales = filtered.slice(0, visibleCount)
   const hasMore = visibleCount < filtered.length
+
+  const handleExportCsv = () => {
+    const headers = ['Date', 'Produit', 'Client', 'Vendeur', 'Quantité', 'Montant (GH₵)', 'Prix initial (GH₵)', 'Motif réduction', 'Type', 'Statut']
+    const rows = filtered.map(s => [
+      new Date(s.created_at).toLocaleString('fr-FR'),
+      s.products?.name ?? '',
+      s.clients?.name ?? '',
+      s.user_id ? (usersById[s.user_id] ?? '') : '',
+      s.qty,
+      s.amount,
+      s.original_amount ?? '',
+      s.discount_reason ?? '',
+      s.type,
+      s.cancelled_at ? 'Annulée' : 'Active',
+    ])
+    const stamp = new Date().toISOString().slice(0, 10)
+    downloadCsv(`ventes_${stamp}.csv`, headers, rows)
+  }
 
   if (loading) return <div style={{ color: '#999', fontSize: '14px', paddingTop: '20px', fontFamily: "'DM Sans', sans-serif" }}>Loading…</div>
 
@@ -226,6 +278,40 @@ export default function VentesView() {
                 {f.label}
               </button>
           ))}
+        </div>
+
+        {/* Afficher les annulées + export comptable */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', alignItems: 'center' }}>
+          <button
+              onClick={() => setShowCancelled(v => !v)}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '100px',
+                border: '1.5px solid #EBEBEB',
+                background: showCancelled ? '#F5F5F5' : 'white',
+                color: '#999',
+                fontFamily: "'DM Sans', sans-serif",
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+          >
+            {showCancelled ? '✓ ' : ''}Show cancelled
+          </button>
+          <button
+              onClick={handleExportCsv}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '100px',
+                border: '1.5px solid #EBEBEB',
+                background: 'white',
+                color: '#999',
+                fontFamily: "'DM Sans', sans-serif",
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+          >
+            ⬇️ Export CSV
+          </button>
         </div>
 
         {/* Barre de recherche nominative */}
@@ -274,10 +360,11 @@ export default function VentesView() {
             {filter === 'toutes' ? 'Total · All Sales' : filter === 'payees' ? 'Total · Paid' : 'Total · Credit'}
           </div>
           <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '32px', color: 'white', letterSpacing: '-0.5px' }}>
-            {formatPrice(filtered.reduce((sum, s) => sum + s.amount, 0))} <span style={{ fontSize: '18px' }}>GH₵</span>
+            {formatPrice(filteredActive.reduce((sum, s) => sum + s.amount, 0))} <span style={{ fontSize: '18px' }}>GH₵</span>
           </div>
           <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginTop: '6px' }}>
-            {filtered.length} transaction{filtered.length !== 1 ? 's' : ''}
+            {filteredActive.length} transaction{filteredActive.length !== 1 ? 's' : ''}
+            {showCancelled && filtered.length !== filteredActive.length ? ` · ${filtered.length - filteredActive.length} cancelled shown` : ''}
           </div>
         </div>
 
@@ -288,13 +375,15 @@ export default function VentesView() {
             </div>
         ) : (
             <div style={{ background: 'white', borderRadius: '18px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)', overflow: 'hidden', marginBottom: hasMore ? '12px' : '24px' }}>
-              {visibleSales.map((s, i) => (
-                  <div key={s.id} style={{ ...saleRowStyles, borderBottom: i < visibleSales.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
+              {visibleSales.map((s, i) => {
+                const isCancelled = !!s.cancelled_at
+                return (
+                  <div key={s.id} style={{ ...saleRowStyles, borderBottom: i < visibleSales.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none', opacity: isCancelled ? 0.5 : 1 }}>
                     <div style={{ width: '34px', height: '34px', borderRadius: '9px', background: '#F5F5F5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', flexShrink: 0 }}>
                       {s.products?.emoji ?? '🍬'}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '13px', fontWeight: '500', color: '#1A1A1A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <div style={{ fontSize: '13px', fontWeight: '500', color: '#1A1A1A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: isCancelled ? 'line-through' : 'none' }}>
                         {s.products?.name ?? '—'}
                       </div>
                       <div style={{ fontSize: '11px', color: '#BBB', marginTop: '1px' }}>
@@ -305,31 +394,52 @@ export default function VentesView() {
                             👤 {usersById[s.user_id]}
                           </div>
                       )}
+                      {s.original_amount != null && (
+                          <div style={{ fontSize: '10px', color: '#C45000', marginTop: '1px' }}>
+                            🏷️ Discounted{s.discount_reason ? ` — ${s.discount_reason}` : ''}
+                          </div>
+                      )}
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontSize: '13px', fontWeight: '600', color: '#1A1A1A' }}>{s.amount?.toLocaleString()} GH₵</div>
-                      <span style={s.type === 'cash' ? badgeCashStyles : badgeDetteStyles}>
-                  {s.type === 'cash' ? 'Paid' : 'Credit'}
-                </span>
+                      {s.original_amount != null && (
+                          <div style={{ fontSize: '10px', color: '#BBB', textDecoration: 'line-through' }}>
+                            {s.original_amount.toLocaleString()} GH₵
+                          </div>
+                      )}
+                      <div style={{ fontSize: '13px', fontWeight: '600', color: '#1A1A1A', textDecoration: isCancelled ? 'line-through' : 'none' }}>{s.amount?.toLocaleString()} GH₵</div>
+                      {isCancelled ? (
+                          <span style={badgeCancelledStyles}>Cancelled</span>
+                      ) : (
+                          <span style={s.type === 'cash' ? badgeCashStyles : badgeDetteStyles}>
+                      {s.type === 'cash' ? 'Paid' : 'Credit'}
+                    </span>
+                      )}
                     </div>
-                    <button
-                        onClick={() => setSaleToCancel(s)}
-                        title="Cancel sale"
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#BBB',
-                          fontSize: '15px',
-                          cursor: 'pointer',
-                          padding: '6px',
-                          flexShrink: 0,
-                          lineHeight: 1,
-                        }}
-                    >
-                      🗑️
-                    </button>
+                    {!isCancelled && (
+                        <button
+                            onClick={() => printReceipt({
+                              productName: s.products?.name, emoji: s.products?.emoji, qty: s.qty,
+                              amount: s.amount, type: s.type, clientName: s.clients?.name, created_at: s.created_at,
+                              originalAmount: s.original_amount, discountReason: s.discount_reason,
+                            })}
+                            title="Print receipt"
+                            style={iconActionStyles}
+                        >
+                          🖨️
+                        </button>
+                    )}
+                    {!isCancelled && (
+                        <button
+                            onClick={() => setSaleToCancel(s)}
+                            title="Cancel sale"
+                            style={iconActionStyles}
+                        >
+                          🗑️
+                        </button>
+                    )}
                   </div>
-              ))}
+                )
+              })}
             </div>
         )}
 
@@ -536,3 +646,5 @@ export default function VentesView() {
 const saleRowStyles = { display: 'flex', alignItems: 'center', padding: '12px 16px', gap: '12px' }
 const badgeCashStyles = { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#E8F5EC', color: '#2E7D42', marginTop: '2px' }
 const badgeDetteStyles = { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#FFF0E8', color: '#C45000', marginTop: '2px' }
+const badgeCancelledStyles = { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#F0F0F0', color: '#999', marginTop: '2px' }
+const iconActionStyles = { background: 'none', border: 'none', color: '#BBB', fontSize: '15px', cursor: 'pointer', padding: '6px', flexShrink: 0, lineHeight: 1 }

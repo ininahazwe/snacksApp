@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import EditProductModal from '../components/EditProductModal'
+import { downloadCsv } from '../lib/exportCsv'
 
 export default function StocksView() {
   const [produits, setProduits] = useState([])
@@ -12,6 +13,11 @@ export default function StocksView() {
   const [filtre, setFiltre] = useState('all') // 'all' | 'low' | 'ok'
   const [expandedId, setExpandedId] = useState(null) // Quel produit est ouvert
   const [produitAEditer, setProduitAEditer] = useState(null)
+
+  // Onglet : vue par produit (existante) ou grand livre de tous les lots
+  const [vue, setVue] = useState('produits') // 'produits' | 'grandLivre'
+  const [ledgerSearch, setLedgerSearch] = useState('')
+  const [ledgerStatut, setLedgerStatut] = useState('all') // 'all' | 'active' | 'exhausted'
 
   useEffect(() => {
     fetchProduits()
@@ -28,9 +34,12 @@ export default function StocksView() {
   }
 
   const fetchBatches = async () => {
+    // On récupère aussi le produit associé (nom, emoji, couleur) : nécessaire
+    // pour afficher le grand livre tous produits confondus, pas seulement
+    // dans l'expandable d'un produit où le nom est déjà connu par ailleurs.
     const { data } = await supabase
         .from('stock_batches')
-        .select('*')
+        .select('*, products(name, emoji, color)')
         .order('received_at', { ascending: false })
     setBatches(data ?? [])
   }
@@ -103,11 +112,137 @@ export default function StocksView() {
   const stockTotal = produits.reduce((sum, p) => sum + p.stock, 0)
   const maxStock = Math.max(...produits.map(p => p.stock), 1)
 
+  // Grand livre : tous les lots de tous les produits, filtrés par nom + statut
+  const ledgerFiltre = batches
+      .filter(b => {
+        if (ledgerStatut === 'active') return b.exhausted_at === null
+        if (ledgerStatut === 'exhausted') return b.exhausted_at !== null
+        return true
+      })
+      .filter(b => (b.products?.name ?? '').toLowerCase().includes(ledgerSearch.toLowerCase()))
+
+  const ledgerActiveCount = batches.filter(b => b.exhausted_at === null).length
+  const ledgerExhaustedCount = batches.filter(b => b.exhausted_at !== null).length
+
+  const handleExportLedger = () => {
+    const headers = ['Product', 'Quantity received', 'Date added', 'Date exhausted', 'Status', 'Duration (days)']
+    const rows = ledgerFiltre.map(b => {
+      const received = new Date(b.received_at)
+      const exhausted = b.exhausted_at ? new Date(b.exhausted_at) : null
+      const days = b.duration_days ?? Math.round(((exhausted ?? new Date()) - received) / (1000 * 60 * 60 * 24))
+      return [
+        b.products?.name ?? '',
+        b.received_qty,
+        received.toLocaleDateString('en-GB'),
+        exhausted ? exhausted.toLocaleDateString('en-GB') : '',
+        exhausted ? 'Exhausted' : 'Active',
+        days,
+      ]
+    })
+    const stamp = new Date().toISOString().slice(0, 10)
+    downloadCsv(`stock_ledger_${stamp}.csv`, headers, rows)
+  }
+
   if (loading) return <div style={s.loading}>Loading…</div>
 
   return (
       <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
         <p style={s.titre}>Inventory</p>
+
+        {/* Onglets : vue par produit vs grand livre de tous les lots */}
+        <div style={s.tabRow}>
+          {[['produits', 'Products'], ['grandLivre', 'Batch ledger']].map(([val, label]) => (
+              <button
+                  key={val}
+                  onClick={() => setVue(val)}
+                  style={{ ...s.tabBtn, ...(vue === val ? s.tabBtnActive : {}) }}
+              >
+                {label}
+              </button>
+          ))}
+        </div>
+
+        {vue === 'grandLivre' ? (
+            <div>
+              {/* KPIs grand livre */}
+              <div style={s.kpiRow}>
+                <div style={s.kpiCard}>
+                  <div style={s.kpiLabel}>Active batches</div>
+                  <div style={{ ...s.kpiValue, color: '#2E7D42' }}>{ledgerActiveCount}</div>
+                </div>
+                <div style={s.kpiCard}>
+                  <div style={s.kpiLabel}>Exhausted batches</div>
+                  <div style={s.kpiValue}>{ledgerExhaustedCount}</div>
+                </div>
+              </div>
+
+              {/* Filtre statut + export */}
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+                {[['all', 'All'], ['active', 'Active'], ['exhausted', 'Exhausted']].map(([val, label]) => (
+                    <button
+                        key={val}
+                        onClick={() => setLedgerStatut(val)}
+                        style={{ ...s.filterBtn, ...(ledgerStatut === val ? s.filterBtnActive : {}) }}
+                    >
+                      {label}
+                    </button>
+                ))}
+                <button onClick={handleExportLedger} style={s.exportBtn}>⬇️ Export CSV</button>
+              </div>
+
+              {/* Recherche par produit */}
+              <div style={{ position: 'relative', marginBottom: '16px' }}>
+                <div style={s.searchIcon}>🔍</div>
+                <input
+                    style={s.searchInput}
+                    placeholder="Search by product…"
+                    value={ledgerSearch}
+                    onChange={e => setLedgerSearch(e.target.value)}
+                />
+              </div>
+
+              {/* Liste des lots */}
+              {ledgerFiltre.length === 0 ? (
+                  <div style={s.empty}><div style={{ fontSize: '32px', marginBottom: '12px' }}>📋</div>No batches found</div>
+              ) : (
+                  <div style={s.card}>
+                    {ledgerFiltre.map((batch, i) => {
+                      const received = new Date(batch.received_at)
+                      const exhausted = batch.exhausted_at ? new Date(batch.exhausted_at) : new Date()
+                      const days = batch.duration_days ?? Math.round((exhausted - received) / (1000 * 60 * 60 * 24))
+                      const isActive = batch.exhausted_at === null
+
+                      return (
+                          <div
+                              key={batch.id}
+                              style={{ ...s.ledgerRow, borderBottom: i < ledgerFiltre.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}
+                          >
+                            <div style={{ ...s.prodEmoji, width: '34px', height: '34px', fontSize: '16px', background: (batch.products?.color ?? '#EEE') + '22' }}>
+                              {batch.products?.emoji ?? '🍬'}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={s.ledgerProduit}>{batch.products?.name ?? 'Unknown product'}</div>
+                              <div style={s.ledgerMeta}>
+                                {batch.received_qty} units · added {received.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                {batch.exhausted_at ? ` · exhausted ${exhausted.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+                                {' · '}{days}d
+                              </div>
+                            </div>
+                            <div style={{
+                              ...s.statusBadge,
+                              background: isActive ? '#E8F5EC' : '#FFF0E8',
+                              color: isActive ? '#2E7D42' : '#C45000',
+                            }}>
+                              {isActive ? 'Active' : 'Done'}
+                            </div>
+                          </div>
+                      )
+                    })}
+                  </div>
+              )}
+            </div>
+        ) : (
+        <div>
 
         {/* KPIs */}
         <div style={s.kpiRow}>
@@ -323,6 +458,8 @@ export default function StocksView() {
               })}
             </div>
         )}
+        </div>
+        )}
 
         {/* Modal édition produit */}
         {produitAEditer && (
@@ -398,6 +535,15 @@ export default function StocksView() {
 const s = {
   loading: { color: '#999', fontSize: '14px', paddingTop: '20px' },
   titre: { fontFamily: "'DM Serif Display', serif", fontSize: '18px', color: '#1A1A1A', marginBottom: '16px' },
+  tabRow: { display: 'flex', gap: '8px', marginBottom: '20px', background: '#F0F0F0', padding: '4px', borderRadius: '12px' },
+  tabBtn: { flex: 1, padding: '9px 14px', borderRadius: '9px', border: 'none', background: 'transparent', fontSize: '13px', fontWeight: '500', color: '#999', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  tabBtnActive: { background: 'white', color: '#1A1A1A', boxShadow: '0 1px 4px rgba(0,0,0,0.08)' },
+  exportBtn: { padding: '6px 12px', borderRadius: '100px', border: '1.5px solid #EBEBEB', background: 'white', color: '#999', fontFamily: "'DM Sans', sans-serif", fontSize: '12px', cursor: 'pointer', marginLeft: 'auto' },
+  searchIcon: { position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#CCC', fontSize: '15px', lineHeight: 1 },
+  searchInput: { width: '100%', padding: '11px 16px 11px 38px', borderRadius: '12px', border: '1.5px solid #EBEBEB', fontSize: '14px', fontFamily: "'DM Sans', sans-serif", color: '#1A1A1A', outline: 'none', boxSizing: 'border-box', background: 'white' },
+  ledgerRow: { display: 'flex', alignItems: 'center', padding: '12px 16px', gap: '12px' },
+  ledgerProduit: { fontSize: '13px', fontWeight: '500', color: '#1A1A1A' },
+  ledgerMeta: { fontSize: '11px', color: '#999', marginTop: '2px' },
   kpiRow: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' },
   kpiCard: { background: 'white', borderRadius: '16px', padding: '16px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' },
   kpiLabel: { fontSize: '11px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' },
@@ -406,6 +552,7 @@ const s = {
   filterBtn: { padding: '7px 14px', borderRadius: '100px', border: '1.5px solid #EBEBEB', background: 'white', fontSize: '12.5px', fontWeight: '500', color: '#999', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
   filterBtnActive: { background: '#1A1A1A', color: 'white', borderColor: '#1A1A1A' },
   empty: { textAlign: 'center', padding: '48px 24px', color: '#BBB', fontSize: '14px' },
+  card: { background: 'white', borderRadius: '18px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)', overflow: 'hidden', marginBottom: '24px' },
   productRow: { background: 'white', borderRadius: '18px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)', display: 'flex', alignItems: 'center', padding: '14px 16px', gap: '12px', cursor: 'pointer', transition: 'all 0.2s ease' },
   expandedSection: { background: '#F9F9F9', borderRadius: '0 0 18px 18px', border: '1px solid rgba(0,0,0,0.05)', borderTop: 'none', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' },
   prodEmoji: { width: '38px', height: '38px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 },

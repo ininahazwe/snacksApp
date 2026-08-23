@@ -8,6 +8,7 @@ export default function ClientsView() {
   const [selectedClient, setSelectedClient] = useState(null)
   const [historique, setHistorique] = useState([])
   const [loadingHistorique, setLoadingHistorique] = useState(false)
+  const [visibleHistCount, setVisibleHistCount] = useState(10)
   const [montantRemboursement, setMontantRemboursement] = useState('')
   const [savingPaiement, setSavingPaiement] = useState(false)
   const [showAddClient, setShowAddClient] = useState(false)
@@ -44,13 +45,15 @@ export default function ClientsView() {
     setEditingNom(false)
     setConfirmDelete(false)
     setSurplusPaiement(null)
+    setVisibleHistCount(10)
     setLoadingHistorique(true)
+    // Historique complet du client (plus de plafond à 20) : affiché ensuite
+    // par pages de 10 côté client via "Load more", comme dans Sales.
     const { data } = await supabase
         .from('sales')
         .select('*, products(name, emoji)')
         .eq('client_id', client.id)
         .order('created_at', { ascending: false })
-        .limit(20)
     setHistorique(data ?? [])
     setLoadingHistorique(false)
   }
@@ -150,7 +153,6 @@ export default function ClientsView() {
         .select('*, products(name, emoji)')
         .eq('client_id', clientId)
         .order('created_at', { ascending: false })
-        .limit(20)
     setHistorique(data ?? [])
   }
 
@@ -414,29 +416,53 @@ export default function ClientsView() {
                 ) : historique.length === 0 ? (
                     <div style={s.emptySmall}>No purchases yet</div>
                 ) : (
-                    <div style={s.historiqueList}>
-                      {historique.map((v, i) => (
-                          <div key={v.id} style={{ ...s.historiqueRow, borderBottom: i < historique.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                            <div style={s.histEmoji}>{v.type === 'paiement' ? '💳' : (v.products?.emoji ?? '🍬')}</div>
-                            <div style={{ flex: 1 }}>
-                              <div style={s.histNom}>{v.type === 'paiement' ? 'Debt payment' : (v.products?.name ?? '—')}</div>
-                              <div style={s.histDate}>{formatDate(v.created_at)}{v.type !== 'paiement' ? ` · ×${v.qty}` : ''}</div>
-                            </div>
-                            <div style={{ textAlign: 'right' }}>
-                              <div style={{ ...s.histMontant, color: v.type === 'paiement' ? '#2E7D42' : '#1A1A1A' }}>
-                                {v.type === 'paiement' ? '−' : ''}{v.amount?.toLocaleString()} GH₵
+                    <>
+                      <div style={s.historiqueList}>
+                        {historique.slice(0, visibleHistCount).map((v, i, arr) => (
+                            <div key={v.id} style={{ ...s.historiqueRow, borderBottom: i < arr.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none', opacity: v.cancelled_at ? 0.5 : 1 }}>
+                              <div style={s.histEmoji}>{v.type === 'paiement' ? '💳' : (v.products?.emoji ?? '🍬')}</div>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ ...s.histNom, textDecoration: v.cancelled_at ? 'line-through' : 'none' }}>{v.type === 'paiement' ? 'Debt payment' : (v.products?.name ?? '—')}</div>
+                                <div style={s.histDate}>{formatDate(v.created_at)}{v.type !== 'paiement' ? ` · ×${v.qty}` : ''}</div>
+                                {v.original_amount != null && (
+                                    <div style={{ fontSize: '10px', color: '#C45000', marginTop: '1px' }}>
+                                      🏷️ Discounted{v.discount_reason ? ` — ${v.discount_reason}` : ''}
+                                    </div>
+                                )}
                               </div>
-                              {v.type === 'paiement' ? (
-                                  <span style={s.badgeCash}>Payment</span>
-                              ) : (
-                                  <span style={v.type === 'cash' ? s.badgeCash : s.badgeDette}>
-                            {v.type === 'cash' ? 'Paid' : 'Credit'}
-                          </span>
-                              )}
+                              <div style={{ textAlign: 'right' }}>
+                                {v.original_amount != null && (
+                                    <div style={{ fontSize: '10px', color: '#BBB', textDecoration: 'line-through' }}>
+                                      {v.original_amount.toLocaleString()} GH₵
+                                    </div>
+                                )}
+                                <div style={{ ...s.histMontant, color: v.type === 'paiement' ? '#2E7D42' : '#1A1A1A' }}>
+                                  {v.type === 'paiement' ? '−' : ''}{v.amount?.toLocaleString()} GH₵
+                                </div>
+                                {v.cancelled_at ? (
+                                    <span style={s.badgeDette}>Cancelled</span>
+                                ) : v.type === 'paiement' ? (
+                                    <span style={s.badgeCash}>Payment</span>
+                                ) : (
+                                    <span style={v.type === 'cash' ? s.badgeCash : s.badgeDette}>
+                              {v.type === 'cash' ? 'Paid' : 'Credit'}
+                            </span>
+                                )}
+                              </div>
+                            </div>
+                        ))}
+                      </div>
+                      {visibleHistCount < historique.length && (
+                          <div style={{ textAlign: 'center', marginTop: '10px' }}>
+                            <button style={s.loadMoreBtn} onClick={() => setVisibleHistCount(c => c + 10)}>
+                              Load more
+                            </button>
+                            <div style={{ fontSize: '11px', color: '#BBB', marginTop: '6px' }}>
+                              {Math.min(visibleHistCount, historique.length)} of {historique.length}
                             </div>
                           </div>
-                      ))}
-                    </div>
+                      )}
+                    </>
                 )}
 
                 {/* ── Zone suppression ── */}
@@ -550,6 +576,7 @@ const s = {
   badgeCash: { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#E8F5EC', color: '#2E7D42' },
   badgeDette: { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#FFF0E8', color: '#C45000' },
   emptySmall: { fontSize: '13px', color: '#BBB', padding: '16px 0' },
+  loadMoreBtn: { padding: '9px 18px', borderRadius: '100px', border: '1.5px solid #EBEBEB', background: 'white', color: '#1A1A1A', fontFamily: "'DM Sans', sans-serif", fontSize: '12.5px', fontWeight: '500', cursor: 'pointer' },
   fieldGroup: { marginBottom: '16px' },
   input: { width: '100%', padding: '13px 16px', borderRadius: '12px', border: '1.5px solid #EBEBEB', fontSize: '15px', fontFamily: "'DM Sans', sans-serif", color: '#1A1A1A', outline: 'none', boxSizing: 'border-box' },
   submitBtn: { width: '100%', padding: '16px', background: '#1A1A1A', color: 'white', border: 'none', borderRadius: '16px', fontFamily: "'DM Sans', sans-serif", fontSize: '15px', fontWeight: '500', cursor: 'pointer', marginTop: '8px' },
