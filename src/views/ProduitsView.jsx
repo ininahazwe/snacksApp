@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import NewProductModal from '../components/NewProductModal'
 import { formatPrice } from '../lib/format'
+import { cacheProducts, getCachedProducts, onCacheUpdated } from '../lib/offlineCache'
 
 export default function ProduitsView({ onProductTap }) {
   const [products, setProducts] = useState([])
@@ -10,11 +11,21 @@ export default function ProduitsView({ onProductTap }) {
   const [showNewProduct, setShowNewProduct] = useState(false)
   const [selectedCategory, setSelectedCategory] = useState('All')
 
-  useEffect(() => { fetchProducts() }, [])
+  useEffect(() => {
+    fetchProducts()
+    // Se rafraîchit depuis le cache si une vente hors-ligne vient d'ajuster le stock localement.
+    return onCacheUpdated(fetchProducts)
+  }, [])
 
   const fetchProducts = async () => {
+    if (!navigator.onLine) {
+      setProducts(getCachedProducts())
+      setLoading(false)
+      return
+    }
     const { data } = await supabase.from('products').select('*').order('name')
     setProducts(data ?? [])
+    cacheProducts(data ?? [])
     setLoading(false)
   }
 

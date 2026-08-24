@@ -24,17 +24,28 @@ export default function EditProductModal({ product, onClose, onUpdated, onDelete
 
     // Suppression
     const [nbVentes, setNbVentes] = useState(null)
+    const [nbBatches, setNbBatches] = useState(null)
+    const [nbMovements, setNbMovements] = useState(null)
     const [loadingVentes, setLoadingVentes] = useState(true)
     const [confirmDelete, setConfirmDelete] = useState(false)
     const [deleting, setDeleting] = useState(false)
 
     useEffect(() => {
         fetchCategories()
-        supabase
-            .from('sales')
-            .select('id', { count: 'exact', head: true })
-            .eq('product_id', product.id)
-            .then(({ count }) => { setNbVentes(count ?? 0); setLoadingVentes(false) })
+        // On vérifie aussi les lots et mouvements de stock, pas seulement les
+        // ventes : un produit jamais vendu mais déjà réceptionné en stock
+        // violerait quand même une contrainte de clé étrangère à la
+        // suppression (stock_batches/stock_movements référencent products).
+        Promise.all([
+            supabase.from('sales').select('id', { count: 'exact', head: true }).eq('product_id', product.id),
+            supabase.from('stock_batches').select('id', { count: 'exact', head: true }).eq('product_id', product.id),
+            supabase.from('stock_movements').select('id', { count: 'exact', head: true }).eq('product_id', product.id),
+        ]).then(([salesRes, batchesRes, movementsRes]) => {
+            setNbVentes(salesRes.count ?? 0)
+            setNbBatches(batchesRes.count ?? 0)
+            setNbMovements(movementsRes.count ?? 0)
+            setLoadingVentes(false)
+        })
     }, [])
 
     const fetchCategories = async () => {
@@ -317,10 +328,14 @@ export default function EditProductModal({ product, onClose, onUpdated, onDelete
                 {/* ── Suppression ── */}
                 <div style={{ marginTop: '20px', borderTop: '1px solid #F0F0F0', paddingTop: '20px' }}>
                     {loadingVentes ? (
-                        <div style={{ fontSize: '12px', color: '#CCC', textAlign: 'center' }}>Checking sales…</div>
+                        <div style={{ fontSize: '12px', color: '#CCC', textAlign: 'center' }}>Checking sales & stock history…</div>
                     ) : nbVentes > 0 ? (
                         <div style={{ fontSize: '12px', color: '#BBB', textAlign: 'center', padding: '4px 0' }}>
                             {nbVentes} sale{nbVentes > 1 ? 's' : ''} recorded — this product cannot be deleted.
+                        </div>
+                    ) : (nbBatches > 0 || nbMovements > 0) ? (
+                        <div style={{ fontSize: '12px', color: '#BBB', textAlign: 'center', padding: '4px 0' }}>
+                            This product has stock history (received batches or stock movements) — it cannot be deleted.
                         </div>
                     ) : !confirmDelete ? (
                         <button style={styles.deleteBtn} onClick={() => setConfirmDelete(true)}>

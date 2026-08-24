@@ -8,6 +8,7 @@ export default function ClientsView() {
   const [selectedClient, setSelectedClient] = useState(null)
   const [historique, setHistorique] = useState([])
   const [loadingHistorique, setLoadingHistorique] = useState(false)
+  const [visibleHistCount, setVisibleHistCount] = useState(10)
   const [montantRemboursement, setMontantRemboursement] = useState('')
   const [savingPaiement, setSavingPaiement] = useState(false)
   const [showAddClient, setShowAddClient] = useState(false)
@@ -44,13 +45,15 @@ export default function ClientsView() {
     setEditingNom(false)
     setConfirmDelete(false)
     setSurplusPaiement(null)
+    setVisibleHistCount(10)
     setLoadingHistorique(true)
+    // Historique complet du client (plus de plafond à 20) : affiché ensuite
+    // par pages de 10 côté client via "Load more", comme dans Sales.
     const { data } = await supabase
         .from('sales')
         .select('*, products(name, emoji)')
         .eq('client_id', client.id)
         .order('created_at', { ascending: false })
-        .limit(20)
     setHistorique(data ?? [])
     setLoadingHistorique(false)
   }
@@ -164,7 +167,6 @@ export default function ClientsView() {
         .select('*, products(name, emoji)')
         .eq('client_id', clientId)
         .order('created_at', { ascending: false })
-        .limit(20)
     setHistorique(data ?? [])
   }
 
@@ -428,51 +430,73 @@ export default function ClientsView() {
                 ) : historique.length === 0 ? (
                     <div style={s.emptySmall}>No purchases yet</div>
                 ) : (
-                    <div style={s.historiqueList}>
-                      {historique.map((v, i) => {
-                        const isCancelled = !!v.cancelled_at
-                        const emoji = v.type === 'paiement' ? '💳' : v.type === 'avoir' ? '💰' : (v.products?.emoji ?? '🍬')
-                        const label = v.type === 'paiement'
-                            ? (v.credit_used > 0 ? 'Debt payment (store credit)' : 'Debt payment')
-                            : v.type === 'avoir'
-                                ? 'Store credit added'
-                                : (v.products?.name ?? '—')
-                        const isNegative = v.type === 'paiement'
-                        const badge = v.type === 'paiement'
-                            ? { style: s.badgeCash, text: 'Payment' }
-                            : v.type === 'avoir'
-                                ? { style: s.badgeCash, text: 'Store credit' }
-                                : v.type === 'cash'
-                                    ? { style: s.badgeCash, text: 'Paid' }
-                                    : { style: s.badgeDette, text: 'Credit' }
-                        return (
-                            <div
-                                key={v.id}
-                                style={{
-                                  ...s.historiqueRow,
-                                  borderBottom: i < historique.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none',
-                                  opacity: isCancelled ? 0.45 : 1,
-                                }}
-                            >
-                              <div style={s.histEmoji}>{emoji}</div>
-                              <div style={{ flex: 1 }}>
-                                <div style={{ ...s.histNom, textDecoration: isCancelled ? 'line-through' : 'none' }}>{label}</div>
-                                <div style={s.histDate}>{formatDate(v.created_at)}{v.qty > 0 ? ` · ×${v.qty}` : ''}</div>
-                              </div>
-                              <div style={{ textAlign: 'right' }}>
-                                <div style={{ ...s.histMontant, color: isNegative ? '#2E7D42' : '#1A1A1A', textDecoration: isCancelled ? 'line-through' : 'none' }}>
-                                  {isNegative ? '−' : ''}{v.amount?.toLocaleString()} GH₵
+                    <>
+                      <div style={s.historiqueList}>
+                        {historique.slice(0, visibleHistCount).map((v, i, arr) => {
+                          const isCancelled = !!v.cancelled_at
+                          const emoji = v.type === 'paiement' ? '💳' : v.type === 'avoir' ? '💰' : (v.products?.emoji ?? '🍬')
+                          const label = v.type === 'paiement'
+                              ? (v.credit_used > 0 ? 'Debt payment (store credit)' : 'Debt payment')
+                              : v.type === 'avoir'
+                                  ? 'Store credit added'
+                                  : (v.products?.name ?? '—')
+                          const isNegative = v.type === 'paiement'
+                          const badge = v.type === 'paiement'
+                              ? { style: s.badgeCash, text: 'Payment' }
+                              : v.type === 'avoir'
+                                  ? { style: s.badgeCash, text: 'Store credit' }
+                                  : v.type === 'cash'
+                                      ? { style: s.badgeCash, text: 'Paid' }
+                                      : { style: s.badgeDette, text: 'Credit' }
+                          return (
+                              <div
+                                  key={v.id}
+                                  style={{
+                                    ...s.historiqueRow,
+                                    borderBottom: i < arr.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none',
+                                    opacity: isCancelled ? 0.45 : 1,
+                                  }}
+                              >
+                                <div style={s.histEmoji}>{emoji}</div>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ ...s.histNom, textDecoration: isCancelled ? 'line-through' : 'none' }}>{label}</div>
+                                  <div style={s.histDate}>{formatDate(v.created_at)}{v.qty > 0 ? ` · ×${v.qty}` : ''}</div>
+                                  {v.original_amount != null && (
+                                      <div style={{ fontSize: '10px', color: '#C45000', marginTop: '1px' }}>
+                                        🏷️ Discounted{v.discount_reason ? ` — ${v.discount_reason}` : ''}
+                                      </div>
+                                  )}
                                 </div>
-                                {isCancelled ? (
-                                    <span style={s.badgeCancelled}>Cancelled</span>
-                                ) : (
-                                    <span style={badge.style}>{badge.text}</span>
-                                )}
+                                <div style={{ textAlign: 'right' }}>
+                                  {v.original_amount != null && (
+                                      <div style={{ fontSize: '10px', color: '#BBB', textDecoration: 'line-through' }}>
+                                        {v.original_amount.toLocaleString()} GH₵
+                                      </div>
+                                  )}
+                                  <div style={{ ...s.histMontant, color: isNegative ? '#2E7D42' : '#1A1A1A', textDecoration: isCancelled ? 'line-through' : 'none' }}>
+                                    {isNegative ? '−' : ''}{v.amount?.toLocaleString()} GH₵
+                                  </div>
+                                  {isCancelled ? (
+                                      <span style={s.badgeCancelled}>Cancelled</span>
+                                  ) : (
+                                      <span style={badge.style}>{badge.text}</span>
+                                  )}
+                                </div>
                               </div>
+                          )
+                        })}
+                      </div>
+                      {visibleHistCount < historique.length && (
+                          <div style={{ textAlign: 'center', marginTop: '10px' }}>
+                            <button style={s.loadMoreBtn} onClick={() => setVisibleHistCount(c => c + 10)}>
+                              Load more
+                            </button>
+                            <div style={{ fontSize: '11px', color: '#BBB', marginTop: '6px' }}>
+                              {Math.min(visibleHistCount, historique.length)} of {historique.length}
                             </div>
-                        )
-                      })}
-                    </div>
+                          </div>
+                      )}
+                    </>
                 )}
 
                 {/* ── Zone suppression ── */}
@@ -587,6 +611,7 @@ const s = {
   badgeDette: { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#FFF0E8', color: '#C45000' },
   badgeCancelled: { display: 'inline-block', padding: '2px 7px', borderRadius: '100px', fontSize: '10px', fontWeight: '500', background: '#F0F0F0', color: '#999' },
   emptySmall: { fontSize: '13px', color: '#BBB', padding: '16px 0' },
+  loadMoreBtn: { padding: '9px 18px', borderRadius: '100px', border: '1.5px solid #EBEBEB', background: 'white', color: '#1A1A1A', fontFamily: "'DM Sans', sans-serif", fontSize: '12.5px', fontWeight: '500', cursor: 'pointer' },
   fieldGroup: { marginBottom: '16px' },
   input: { width: '100%', padding: '13px 16px', borderRadius: '12px', border: '1.5px solid #EBEBEB', fontSize: '15px', fontFamily: "'DM Sans', sans-serif", color: '#1A1A1A', outline: 'none', boxSizing: 'border-box' },
   submitBtn: { width: '100%', padding: '16px', background: '#1A1A1A', color: 'white', border: 'none', borderRadius: '16px', fontFamily: "'DM Sans', sans-serif", fontSize: '15px', fontWeight: '500', cursor: 'pointer', marginTop: '8px' },

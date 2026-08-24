@@ -75,15 +75,30 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
 
       if (error) throw error
 
-      // Si stock initial > 0, créer un batch automatiquement
+      // Si stock initial > 0, créer un batch automatiquement + journaliser le
+      // mouvement correspondant (sinon la somme des mouvements ne colle plus
+      // au stock affiché dès la création du produit — même logique que
+      // "Add batch" dans Inventory, qui journalise déjà ce mouvement).
       const initialQty = parseInt(stock) || 0
       if (initialQty > 0) {
-        const { error: batchError } = await supabase.from('stock_batches').insert({
-          product_id: data.id,
-          received_qty: initialQty,
-          received_at: new Date().toISOString(),
-        })
+        const { data: newBatch, error: batchError } = await supabase
+            .from('stock_batches')
+            .insert({
+              product_id: data.id,
+              received_qty: initialQty,
+              received_at: new Date().toISOString(),
+            })
+            .select()
+            .single()
         if (batchError) console.error('Erreur création batch:', batchError)
+
+        const { error: movError } = await supabase.from('stock_movements').insert({
+          product_id: data.id,
+          batch_id: newBatch?.id ?? null,
+          delta: initialQty,
+          reason: 'reception_carton',
+        })
+        if (movError) console.error('Erreur mouvement initial:', movError)
       }
 
       onCreated(data)
