@@ -124,6 +124,20 @@ export default function StocksView() {
   const ledgerActiveCount = batches.filter(b => b.exhausted_at === null).length
   const ledgerExhaustedCount = batches.filter(b => b.exhausted_at !== null).length
 
+  // Export CSV des produits en stock bas — utilise `liste`, qui applique déjà
+  // le filtre 'low' (stock < 10) et la recherche nominative en cours.
+  const handleExportLowStock = () => {
+    const headers = ['Product', 'Category', 'Current stock', 'Price (GH₵)']
+    const rows = liste.map(p => [
+      p.name,
+      p.category ?? '',
+      p.stock,
+      p.price ?? '',
+    ])
+    const stamp = new Date().toISOString().slice(0, 10)
+    downloadCsv(`low_stock_${stamp}.csv`, headers, rows)
+  }
+
   const handleExportLedger = () => {
     const headers = ['Product', 'Quantity received', 'Date added', 'Date exhausted', 'Status', 'Duration (days)']
     const rows = ledgerFiltre.map(b => {
@@ -269,6 +283,9 @@ export default function StocksView() {
                 {label}
               </button>
           ))}
+          {filtre === 'low' && (
+              <button onClick={handleExportLowStock} style={s.exportBtn}>⬇️ Export CSV</button>
+          )}
         </div>
 
         {/* Recherche nominative */}
@@ -548,7 +565,7 @@ const s = {
   kpiCard: { background: 'white', borderRadius: '16px', padding: '16px', border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' },
   kpiLabel: { fontSize: '11px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' },
   kpiValue: { fontFamily: "'DM Serif Display', serif", fontSize: '22px', color: '#1A1A1A' },
-  filterRow: { display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' },
+  filterRow: { display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' },
   filterBtn: { padding: '7px 14px', borderRadius: '100px', border: '1.5px solid #EBEBEB', background: 'white', fontSize: '12.5px', fontWeight: '500', color: '#999', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
   filterBtnActive: { background: '#1A1A1A', color: 'white', borderColor: '#1A1A1A' },
   empty: { textAlign: 'center', padding: '48px 24px', color: '#BBB', fontSize: '14px' },
