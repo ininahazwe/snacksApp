@@ -1,0 +1,770 @@
+import { useState, useEffect } from 'react'
+import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
+import { formatPrice, round2 } from '../lib/format'
+import { printReceipt } from '../lib/receipt'
+import { enqueueSale } from '../lib/offlineQueue'
+import { cacheClients, getCachedClients, cacheProducts, getCachedProducts, notifyCacheUpdated } from '../lib/offlineCache'
+
+// Vente "panier" : plusieurs produits, un seul client, un seul paiement, un
+// seul reçu — pour enregistrer en une fois un achat multi-produits.
+//
+// Réutilise exactement la même logique par ligne que SaleModal (vente à 1
+// produit) : lot FIFO, décrément de stock, mouvement de stock, épuisement
+// de lot. La différence est que toutes les lignes partagent un `group_id`
+// commun généré ici, et que la dette/l'avoir générés par le paiement du
+// panier sont répartis au prorata du montant de chaque ligne (pour que les
+// agrégats déjà en place — Dashboard, fiche client, VentesView — restent
+// corrects sans devoir les réécrire). Le solde du client, lui, n'est mis à
+// jour qu'une seule fois avec les vrais totaux (pas la somme des parts
+// arrondies) pour éviter toute dérive de centimes.
+//
+// Chaque ligne reste malgré tout complète et indépendante (son propre lot,
+// sa propre part de dette/avoir) : VentesView peut donc annuler une seule
+// ligne du panier ou le panier entier avec la même logique d'annulation
+// déjà existante, sans aucun changement à cette logique.
+export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
+  const { user } = useAuth()
+  const [lines, setLines] = useState(() => cart.map(c => ({
+    product: c.product,
+    qty: c.qty,
+    isDiscounted: false,
+    discountedPrice: '',
+    discountReason: '',
+  })))
+  const [selectedClient, setSelectedClient] = useState(null)
+  const [paymentType, setPaymentType] = useState('cash')
+  const [clients, setClients] = useState([])
+  const [clientSearch, setClientSearch] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [loadingClients, setLoadingClients] = useState(true)
+  const [cashReceived, setCashReceived] = useState('')
+  const [saveAsCredit, setSaveAsCredit] = useState(false)
+  const [useCredit, setUseCredit] = useState(false)
+  const [receiptData, setReceiptData] = useState(null)
+
+  useEffect(() => { fetchClients() }, [])
+
+  const fetchClients = async () => {
+    if (!navigator.onLine) {
+      setClients(getCachedClients())
+      setLoadingClients(false)
+      return
+    }
+    const { data } = await supabase.from('clients').select('*').order('name')
+    setClients(data ?? [])
+    cacheClients(data ?? [])
+    setLoadingClients(false)
+  }
+
+  // -- Calculs par ligne (même formule que SaleModal, appliquée à chaque produit) --
+  const computedLines = lines.map(l => {
+    const parsedDiscountPrice = parseFloat(l.discountedPrice)
+    const discountInvalid = l.isDiscounted && (
+        l.discountedPrice === '' || isNaN(parsedDiscountPrice) || parsedDiscountPrice < 0 || parsedDiscountPrice >= l.product.price
+    )
+    const hasValidDiscount = l.isDiscounted && !discountInvalid
+    const effectiveUnitPrice = hasValidDiscount ? parsedDiscountPrice : l.product.price
+    const total = round2(effectiveUnitPrice * l.qty)
+    const originalTotal = round2(l.product.price * l.qty)
+    const insufficientStock = l.qty > (l.product.stock ?? 0)
+    return { ...l, discountInvalid, hasValidDiscount, effectiveUnitPrice, total, originalTotal, insufficientStock }
+  })
+
+  const cartTotal = round2(computedLines.reduce((sum, l) => sum + l.total, 0))
+  const anyDiscountInvalid = computedLines.some(l => l.discountInvalid)
+  const anyInsufficientStock = computedLines.some(l => l.insufficientStock)
+
+  const clientCredit = selectedClient?.credit ?? 0
+  const appliedCredit = useCredit && clientCredit > 0 ? Math.min(round2(clientCredit), cartTotal) : 0
+  const amountDue = round2(cartTotal - appliedCredit)
+
+  const received = parseFloat(cashReceived) || 0
+  const changeDue = paymentType === 'cash' && received > amountDue ? round2(received - amountDue) : 0
+  const creditNeedsClient = saveAsCredit && changeDue > 0 && !selectedClient
+  const cashReceivedIsInsufficient = paymentType === 'cash' && cashReceived !== '' && received < amountDue
+
+  const debtAddedTotal = paymentType === 'dette' ? amountDue : 0
+  const newCreditFromChange = (paymentType === 'cash' && saveAsCredit && changeDue > 0) ? changeDue : 0
+
+  const filteredClients = clients.filter(c => c.name.toLowerCase().includes(clientSearch.toLowerCase()))
+
+  const updateLine = (idx, patch) => setLines(ls => ls.map((l, i) => i === idx ? { ...l, ...patch } : l))
+  const removeLine = (idx) => setLines(ls => ls.filter((_, i) => i !== idx))
+
+  // Répartit un montant (dette ajoutée / avoir consommé / avoir créé) sur les
+  // lignes actives au prorata de leur part du panier. Le reste (arrondi) est
+  // donné à la dernière ligne, pour que la somme des parts tombe pile sur le
+  // montant réel appliqué au client — sinon un arrondi ligne par ligne pourrait
+  // dériver de quelques centimes par rapport au total.
+  const splitProrata = (total, activeLines) => {
+    if (total === 0 || cartTotal === 0) return activeLines.map(() => 0)
+    const shares = activeLines.map(l => round2(total * (l.total / cartTotal)))
+    const sumSoFar = shares.reduce((s, v) => s + v, 0)
+    shares[shares.length - 1] = round2(shares[shares.length - 1] + (total - sumSoFar))
+    return shares
+  }
+
+  const buildReceiptData = (offline) => ({
+    lines: computedLines.map(l => ({
+      productName: l.product.name, emoji: l.product.emoji, qty: l.qty, unitPrice: l.effectiveUnitPrice,
+      amount: l.total, originalAmount: l.hasValidDiscount ? l.originalTotal : null,
+      discountReason: l.hasValidDiscount ? (l.discountReason.trim() || null) : null,
+    })),
+    amount: cartTotal, type: paymentType, clientName: selectedClient?.name ?? null,
+    appliedCredit, changeDue: paymentType === 'cash' ? changeDue : 0,
+    newCredit: newCreditFromChange, created_at: new Date().toISOString(), offline,
+  })
+
+  const handleSubmit = async () => {
+    if (anyInsufficientStock) {
+      alert('Not enough stock for one or more items — adjust the quantities.')
+      return
+    }
+    if (computedLines.length === 0) {
+      alert('Cart is empty.')
+      return
+    }
+
+    setLoading(true)
+    const groupId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `grp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+    const debtShares = splitProrata(debtAddedTotal, computedLines)
+    const creditUsedShares = splitProrata(appliedCredit, computedLines)
+    const creditCreatedShares = splitProrata(newCreditFromChange, computedLines)
+
+    // ── Hors-ligne : chaque ligne du panier est mise en file séparément (même
+    // group_id), rejouée un par un au retour du réseau par la même logique
+    // que pour une vente à 1 produit — voir offlineQueue.syncOneSale, non
+    // modifiée pour le panier, juste appelée plusieurs fois.
+    if (!navigator.onLine) {
+      try {
+        computedLines.forEach((l, i) => {
+          const lineAmount = round2(l.total - creditUsedShares[i])
+          enqueueSale({
+            group_id: groupId,
+            product_id: l.product.id,
+            product_name: l.product.name,
+            client_id: selectedClient?.id ?? null,
+            client_name: selectedClient?.name ?? null,
+            user_id: user?.id ?? null,
+            qty: l.qty,
+            amount: lineAmount,
+            amountDue: lineAmount,
+            type: paymentType,
+            appliedCredit: creditUsedShares[i],
+            newCreditFromChange: creditCreatedShares[i],
+            original_amount: l.hasValidDiscount ? l.originalTotal : null,
+            discount_reason: l.hasValidDiscount ? (l.discountReason.trim() || null) : null,
+          })
+        })
+
+        const cachedProducts = getCachedProducts().map(p => {
+          const l = computedLines.find(x => x.product.id === p.id)
+          return l ? { ...p, stock: p.stock - l.qty } : p
+        })
+        cacheProducts(cachedProducts)
+
+        if (selectedClient) {
+          const creditDelta = round2(newCreditFromChange - appliedCredit)
+          const cachedClients = getCachedClients().map(c => {
+            if (c.id !== selectedClient.id) return c
+            const updated = { ...c }
+            if (paymentType === 'dette') updated.debt = round2((c.debt ?? 0) + amountDue)
+            if (creditDelta !== 0) updated.credit = round2((c.credit ?? 0) + creditDelta)
+            return updated
+          })
+          cacheClients(cachedClients)
+        }
+        notifyCacheUpdated()
+
+        setReceiptData(buildReceiptData(true))
+        setCart([])
+        onSuccess(`📴 Sale saved offline — ${formatPrice(cartTotal)} GH₵ (will sync automatically)`)
+      } catch (err) {
+        console.error('Erreur mise en file hors-ligne (panier):', err)
+        alert('Error while saving offline. Please try again.')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
+    try {
+      for (let i = 0; i < computedLines.length; i++) {
+        const l = computedLines[i]
+
+        const { data: batches, error: batchError } = await supabase
+            .from('stock_batches')
+            .select(`
+              *,
+              stock_movements (delta)
+            `)
+            .eq('product_id', l.product.id)
+            .is('exhausted_at', null)
+            .order('received_at', { ascending: true })
+            .limit(1)
+        if (batchError) throw batchError
+        const activeBatch = batches?.[0] ?? null
+
+        let willExhaustBatch = false
+        if (activeBatch) {
+          const pastDeltasSum = activeBatch.stock_movements?.reduce((sum, mov) => sum + mov.delta, 0) || 0
+          const batchRemainingStock = activeBatch.received_qty + pastDeltasSum - l.qty
+          willExhaustBatch = batchRemainingStock <= 0
+        }
+
+        const lineAmount = round2(l.total - creditUsedShares[i])
+
+        const { data: insertedSale, error: saleError } = await supabase
+            .from('sales')
+            .insert({
+              group_id: groupId,
+              product_id: l.product.id,
+              client_id: selectedClient?.id ?? null,
+              user_id: user?.id ?? null,
+              qty: l.qty,
+              amount: lineAmount,
+              type: paymentType,
+              debt_added: debtShares[i],
+              credit_used: creditUsedShares[i],
+              credit_created: creditCreatedShares[i],
+              batch_id: activeBatch?.id ?? null,
+              batch_was_exhausted: willExhaustBatch,
+              original_amount: l.hasValidDiscount ? l.originalTotal : null,
+              discount_reason: l.hasValidDiscount ? (l.discountReason.trim() || null) : null,
+            })
+            .select()
+            .single()
+        if (saleError) throw saleError
+
+        const newStock = l.product.stock - l.qty
+        const { error: stockError } = await supabase
+            .from('products')
+            .update({ stock: newStock })
+            .eq('id', l.product.id)
+        if (stockError) throw stockError
+
+        const { error: movError } = await supabase.from('stock_movements').insert({
+          product_id: l.product.id,
+          batch_id: activeBatch?.id ?? null,
+          sale_id: insertedSale?.id ?? null,
+          delta: -l.qty,
+          reason: 'vente',
+        })
+        if (movError) console.error('Erreur mouvement:', movError)
+
+        if (activeBatch && willExhaustBatch) {
+          const now = new Date()
+          const receivedAt = new Date(activeBatch.received_at)
+          const durationDays = Math.round((now - receivedAt) / (1000 * 60 * 60 * 24))
+          const { error: batchUpdateError } = await supabase
+              .from('stock_batches')
+              .update({ exhausted_at: now.toISOString(), duration_days: durationDays })
+              .eq('id', activeBatch.id)
+          if (batchUpdateError) console.error('Erreur update batch:', batchUpdateError)
+        }
+      }
+
+      // Solde client mis à jour UNE seule fois pour tout le panier, avec les
+      // vrais totaux (pas la somme des parts arrondies par ligne ci-dessus,
+      // qui ne servent qu'à la traçabilité par ligne / l'annulation).
+      if (selectedClient) {
+        if (debtAddedTotal > 0) {
+          await supabase
+              .from('clients')
+              .update({ debt: round2((selectedClient.debt ?? 0) + debtAddedTotal) })
+              .eq('id', selectedClient.id)
+        }
+        const creditDelta = round2(newCreditFromChange - appliedCredit)
+        if (creditDelta !== 0) {
+          await supabase
+              .from('clients')
+              .update({ credit: round2((selectedClient.credit ?? 0) + creditDelta) })
+              .eq('id', selectedClient.id)
+        }
+      }
+
+      const usedMsg = appliedCredit > 0 ? ` · Credit used −${formatPrice(appliedCredit)} GH₵` : ''
+      const newMsg = (newCreditFromChange > 0 && selectedClient) ? ` · Credit +${formatPrice(newCreditFromChange)} GH₵` : ''
+      setReceiptData(buildReceiptData(false))
+      setCart([])
+      onSuccess(`✓ Sale recorded — ${formatPrice(cartTotal)} GH₵${usedMsg}${newMsg}`)
+    } catch (err) {
+      console.error('Erreur vente panier:', err)
+      alert('Error while saving. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Écran de confirmation (même pattern que SaleModal) : reste ouvert jusqu'à
+  // ce que l'utilisateur clique "Done".
+  if (receiptData) {
+    return (
+        <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+          <div style={styles.modal}>
+            <div style={styles.handle} />
+            <div style={{ textAlign: 'center', padding: '4px 0 20px' }}>
+              <div style={{ fontSize: '40px' }}>{receiptData.offline ? '📴' : '✅'}</div>
+              <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '20px', color: '#1A1A1A', marginTop: '8px' }}>
+                {receiptData.offline ? 'Sale saved offline' : 'Sale recorded'}
+              </div>
+              {receiptData.offline && (
+                  <div style={{ fontSize: '12.5px', color: '#C45000', marginTop: '6px' }}>
+                    Will sync automatically once back online
+                  </div>
+              )}
+            </div>
+
+            <div style={{ background: '#F9F9F9', borderRadius: '14px', padding: '16px', marginBottom: '20px', fontSize: '13px', color: '#1A1A1A' }}>
+              {receiptData.lines.map((l, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <span>{l.emoji} {l.productName} × {l.qty}</span>
+                    <span style={{ textAlign: 'right' }}>
+                      {l.originalAmount != null && (
+                          <div style={{ fontSize: '11px', color: '#BBB', textDecoration: 'line-through' }}>
+                            {formatPrice(l.originalAmount)} GH₵
+                          </div>
+                      )}
+                      <span style={{ fontWeight: '600' }}>{formatPrice(l.amount)} GH₵</span>
+                    </span>
+                  </div>
+              ))}
+              <div style={{ borderTop: '1px solid #EBEBEB', marginTop: '10px', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', fontWeight: '600' }}>
+                <span>Total</span><span>{formatPrice(receiptData.amount)} GH₵</span>
+              </div>
+              {receiptData.clientName && (
+                  <div style={{ color: '#999', fontSize: '12px', marginTop: '6px' }}>Client: {receiptData.clientName}</div>
+              )}
+            </div>
+
+            <button style={{ ...styles.submitBtn, marginBottom: '10px' }} onClick={() => printReceipt(receiptData)}>
+              🖨️ Print receipt
+            </button>
+            <button style={{ ...styles.submitBtn, background: '#F5F5F5', color: '#1A1A1A' }} onClick={onClose}>
+              Done
+            </button>
+          </div>
+        </div>
+    )
+  }
+
+  return (
+      <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+        <div style={styles.modal}>
+          <div style={styles.handle} />
+
+          <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '19px', color: '#1A1A1A', marginBottom: '18px' }}>
+            🧺 Cart · {computedLines.length} item{computedLines.length !== 1 ? 's' : ''}
+          </div>
+
+          {/* Lignes du panier */}
+          <div style={{ marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {computedLines.length === 0 && (
+                <div style={{ fontSize: '13px', color: '#BBB', textAlign: 'center', padding: '20px 0' }}>Cart is empty</div>
+            )}
+            {computedLines.map((l, i) => (
+                <div key={l.product.id} style={styles.cartLine}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ ...styles.productEmojiSm, background: (l.product.color ?? '#EEE') + '22' }}>
+                      {l.product.emoji ?? '🍬'}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '13px', fontWeight: '500', color: '#1A1A1A' }}>{l.product.name}</div>
+                      <div style={{ fontSize: '11.5px', color: '#999' }}>{formatPrice(l.effectiveUnitPrice)} GH₵ / unit</div>
+                      {l.insufficientStock && (
+                          <div style={{ fontSize: '11px', color: '#C45000' }}>⚠ Only {l.product.stock ?? 0} in stock</div>
+                      )}
+                    </div>
+                    <div style={styles.qtyControlSm}>
+                      <button style={styles.qtyBtnSm} onClick={() => updateLine(i, { qty: Math.max(1, l.qty - 1) })}>−</button>
+                      <span style={styles.qtyValueSm}>{l.qty}</span>
+                      <button style={styles.qtyBtnSm} onClick={() => updateLine(i, { qty: l.qty + 1 })}>+</button>
+                    </div>
+                    <button onClick={() => removeLine(i)} style={styles.removeBtn} title="Remove from cart">✕</button>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#999', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={l.isDiscounted} onChange={e => updateLine(i, { isDiscounted: e.target.checked })} />
+                      Discounted item
+                    </label>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: '#1A1A1A' }}>{formatPrice(l.total)} GH₵</span>
+                  </div>
+
+                  {l.isDiscounted && (
+                      <div style={{ marginTop: '8px' }}>
+                        <input
+                            style={styles.inputSm}
+                            type="number"
+                            step="0.01"
+                            inputMode="decimal"
+                            placeholder={'New unit price (normally ' + formatPrice(l.product.price) + ')'}
+                            value={l.discountedPrice}
+                            onChange={e => updateLine(i, { discountedPrice: e.target.value })}
+                        />
+                        <input
+                            style={{ ...styles.inputSm, marginTop: '6px' }}
+                            placeholder="Reason (optional)"
+                            value={l.discountReason}
+                            onChange={e => updateLine(i, { discountReason: e.target.value })}
+                        />
+                        {l.discountInvalid && (
+                            <div style={styles.warning}>⚠ Enter a price lower than {formatPrice(l.product.price)} GH₵</div>
+                        )}
+                      </div>
+                  )}
+                </div>
+            ))}
+          </div>
+
+          {/* Client */}
+          <div style={styles.fieldGroup}>
+            <div style={styles.fieldLabel}>Client</div>
+            {loadingClients ? (
+                <div style={styles.loadingText}>Loading…</div>
+            ) : (
+                <>
+                  <input
+                      style={{ ...styles.input, marginBottom: '8px' }}
+                      placeholder="Search clients…"
+                      value={clientSearch}
+                      onChange={e => setClientSearch(e.target.value)}
+                  />
+                  <div style={styles.clientList}>
+                    {filteredClients.length === 0 ? (
+                        <div style={styles.loadingText}>No client found</div>
+                    ) : (
+                        filteredClients.map(c => (
+                            <div
+                                key={c.id}
+                                style={{
+                                  ...styles.clientOption,
+                                  borderColor: selectedClient?.id === c.id ? '#1A1A1A' : '#EBEBEB',
+                                  background: selectedClient?.id === c.id ? '#FAFAFA' : 'white',
+                                }}
+                                onClick={() => { setSelectedClient(selectedClient?.id === c.id ? null : c); setUseCredit(false) }}
+                            >
+                              <div style={{
+                                ...styles.checkCircle,
+                                background: selectedClient?.id === c.id ? '#1A1A1A' : 'transparent',
+                                borderColor: selectedClient?.id === c.id ? '#1A1A1A' : '#DDD',
+                              }}>
+                                {selectedClient?.id === c.id && (
+                                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5">
+                                      <path d="M2 6l3 3 5-5" />
+                                    </svg>
+                                )}
+                              </div>
+                              <span style={styles.clientOptionName}>{c.name}</span>
+                              {c.debt > 0 && (
+                                  <span style={styles.debtBadge}>−{formatPrice(c.debt)} GH₵</span>
+                              )}
+                              {c.credit > 0 && (
+                                  <span style={styles.creditBadge}>+{formatPrice(c.credit)} GH₵</span>
+                              )}
+                            </div>
+                        ))
+                    )}
+                  </div>
+                </>
+            )}
+          </div>
+
+          {/* Mode de paiement */}
+          <div style={styles.fieldGroup}>
+            <div style={styles.fieldLabel}>Payment method</div>
+            <div style={styles.paymentToggle}>
+              <div
+                  style={{
+                    ...styles.paymentOption,
+                    borderColor: paymentType === 'cash' ? '#2E7D42' : '#EBEBEB',
+                    background: paymentType === 'cash' ? '#F0FBF3' : 'white',
+                  }}
+                  onClick={() => setPaymentType('cash')}
+              >
+                <div style={styles.paymentEmoji}>💵</div>
+                <div style={styles.paymentLabel}>Cash payment</div>
+              </div>
+              <div
+                  style={{
+                    ...styles.paymentOption,
+                    borderColor: paymentType === 'dette' ? '#C45000' : '#EBEBEB',
+                    background: paymentType === 'dette' ? '#FFF5EE' : 'white',
+                  }}
+                  onClick={() => setPaymentType('dette')}
+              >
+                <div style={styles.paymentEmoji}>📋</div>
+                <div style={styles.paymentLabel}>On credit</div>
+              </div>
+            </div>
+            {paymentType === 'dette' && !selectedClient && (
+                <div style={styles.warning}>⚠ Select a client to record a credit sale</div>
+            )}
+          </div>
+
+          {/* Utiliser l'avoir du client */}
+          {selectedClient && clientCredit > 0 && (
+              <div style={styles.fieldGroup}>
+                <div style={styles.fieldLabel}>Store credit</div>
+                <div
+                    style={{
+                      ...styles.creditToggle,
+                      marginTop: 0,
+                      borderColor: useCredit ? '#2E7D42' : '#EBEBEB',
+                      background: useCredit ? '#F0FBF3' : 'white',
+                    }}
+                    onClick={() => setUseCredit(v => !v)}
+                >
+                  <div style={{
+                    ...styles.checkCircle,
+                    background: useCredit ? '#2E7D42' : 'transparent',
+                    borderColor: useCredit ? '#2E7D42' : '#DDD',
+                  }}>
+                    {useCredit && (
+                        <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5">
+                          <path d="M2 6l3 3 5-5" />
+                        </svg>
+                    )}
+                  </div>
+                  <span style={{ fontSize: '13px', fontWeight: '500', color: '#1A1A1A', flex: 1 }}>
+                    Apply store credit
+                  </span>
+                  <span style={styles.creditBadge}>{formatPrice(clientCredit)} GH₵ available</span>
+                </div>
+              </div>
+          )}
+
+          {/* Cash reçu + avoir */}
+          {paymentType === 'cash' && (
+              <div style={styles.fieldGroup}>
+                <div style={styles.fieldLabel}>Cash received (optional)</div>
+                <input
+                    style={styles.input}
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    placeholder={formatPrice(amountDue)}
+                    value={cashReceived}
+                    onChange={e => setCashReceived(e.target.value)}
+                />
+                {cashReceivedIsInsufficient && (
+                    <div style={styles.warning}>
+                      ⚠ The amount received is less than the total due. Please correct the amount or select "On credit" payment method.
+                    </div>
+                )}
+                {changeDue > 0 && (
+                    <>
+                      <div style={styles.changeRow}>
+                        Change due: <strong>{formatPrice(changeDue)} GH₵</strong>
+                      </div>
+                      <div
+                          style={{
+                            ...styles.creditToggle,
+                            borderColor: saveAsCredit ? '#2E7D42' : '#EBEBEB',
+                            background: saveAsCredit ? '#F0FBF3' : 'white',
+                          }}
+                          onClick={() => setSaveAsCredit(v => !v)}
+                      >
+                        <div style={{
+                          ...styles.checkCircle,
+                          background: saveAsCredit ? '#2E7D42' : 'transparent',
+                          borderColor: saveAsCredit ? '#2E7D42' : '#DDD',
+                        }}>
+                          {saveAsCredit && (
+                              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5">
+                                <path d="M2 6l3 3 5-5" />
+                              </svg>
+                          )}
+                        </div>
+                        <span style={{ fontSize: '13px', fontWeight: '500', color: '#1A1A1A' }}>
+                          No change available — save as store credit
+                        </span>
+                      </div>
+                      {creditNeedsClient && (
+                          <div style={styles.warning}>⚠ Select a client to save a store credit</div>
+                      )}
+                    </>
+                )}
+              </div>
+          )}
+
+          {/* Total */}
+          <div style={styles.totalLine}>
+            <span style={styles.totalLabel}>Total</span>
+            <span style={styles.totalValue}>{formatPrice(cartTotal)} GH₵</span>
+          </div>
+
+          {appliedCredit > 0 && (
+              <div style={styles.dueBreakdown}>
+                <div style={styles.dueRow}>
+                  <span>Store credit applied</span>
+                  <span style={{ color: '#2E7D42', fontWeight: '600' }}>−{formatPrice(appliedCredit)} GH₵</span>
+                </div>
+                <div style={styles.dueRow}>
+                  <span>To pay</span>
+                  <span style={{ color: '#1A1A1A', fontWeight: '600' }}>{formatPrice(amountDue)} GH₵</span>
+                </div>
+              </div>
+          )}
+
+          <button
+              style={{
+                ...styles.submitBtn,
+                opacity: (loading || computedLines.length === 0 || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient || anyInsufficientStock || anyDiscountInvalid) ? 0.5 : 1,
+                cursor: (loading || computedLines.length === 0 || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient || anyInsufficientStock || anyDiscountInvalid) ? 'not-allowed' : 'pointer',
+              }}
+              onClick={handleSubmit}
+              disabled={loading || computedLines.length === 0 || (paymentType === 'dette' && !selectedClient) || creditNeedsClient || cashReceivedIsInsufficient || anyInsufficientStock || anyDiscountInvalid}
+          >
+            {loading ? 'Saving…' : anyInsufficientStock ? 'Not enough stock' : `Record sale · ${formatPrice(cartTotal)} GH₵`}
+          </button>
+        </div>
+      </div>
+  )
+}
+
+const styles = {
+  overlay: {
+    position: 'fixed', inset: 0,
+    background: 'rgba(0,0,0,0.35)',
+    backdropFilter: 'blur(4px)',
+    zIndex: 100,
+    display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+    animation: 'overlayIn 0.2s ease',
+  },
+  modal: {
+    background: 'white',
+    borderRadius: '28px 28px 0 0',
+    padding: '8px 24px 40px',
+    width: '100%', maxWidth: '430px',
+    maxHeight: '90vh', overflowY: 'auto',
+    animation: 'modalUp 0.3s cubic-bezier(0.34,1.56,0.64,1)',
+    fontFamily: "'DM Sans', sans-serif",
+  },
+  handle: {
+    width: '36px', height: '4px',
+    background: '#E0E0E0', borderRadius: '10px',
+    margin: '10px auto 20px',
+  },
+  cartLine: {
+    background: '#FAFAFA', borderRadius: '14px', padding: '12px', border: '1px solid #F0F0F0',
+  },
+  productEmojiSm: {
+    width: '38px', height: '38px', borderRadius: '10px',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px',
+    flexShrink: 0,
+  },
+  qtyControlSm: {
+    display: 'flex', alignItems: 'center',
+    background: 'white', borderRadius: '10px', border: '1px solid #EBEBEB',
+    overflow: 'hidden', flexShrink: 0,
+  },
+  qtyBtnSm: {
+    width: '30px', height: '30px', border: 'none', background: 'none',
+    fontSize: '16px', cursor: 'pointer', color: '#1A1A1A',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontWeight: '400', fontFamily: "'DM Sans', sans-serif",
+  },
+  qtyValueSm: {
+    minWidth: '26px', textAlign: 'center',
+    fontSize: '13px', fontWeight: '600', color: '#1A1A1A',
+  },
+  removeBtn: {
+    background: 'none', border: 'none', color: '#CCC', fontSize: '13px',
+    cursor: 'pointer', padding: '6px', flexShrink: 0,
+  },
+  fieldGroup: { marginBottom: '20px' },
+  fieldLabel: {
+    fontSize: '11.5px', fontWeight: '600', color: '#999',
+    textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '8px',
+  },
+  loadingText: { fontSize: '13px', color: '#BBB' },
+  clientList: { display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto' },
+  clientOption: {
+    display: 'flex', alignItems: 'center', gap: '10px',
+    padding: '10px 14px', borderRadius: '12px',
+    border: '1.5px solid #EBEBEB', cursor: 'pointer',
+    transition: 'all 0.15s',
+  },
+  checkCircle: {
+    width: '18px', height: '18px', borderRadius: '50%',
+    border: '1.5px solid #DDD',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0, transition: 'all 0.15s',
+  },
+  clientOptionName: { fontSize: '13.5px', fontWeight: '500', color: '#1A1A1A', flex: 1 },
+  debtBadge: {
+    fontSize: '11px', fontWeight: '500',
+    background: '#FFF0E8', color: '#C45000',
+    padding: '2px 8px', borderRadius: '100px',
+  },
+  paymentToggle: { display: 'flex', gap: '10px' },
+  paymentOption: {
+    flex: 1, padding: '12px', borderRadius: '14px',
+    border: '1.5px solid #EBEBEB', cursor: 'pointer',
+    textAlign: 'center', transition: 'all 0.15s',
+  },
+  paymentEmoji: { fontSize: '20px', marginBottom: '4px' },
+  paymentLabel: { fontSize: '12.5px', fontWeight: '500', color: '#1A1A1A' },
+  warning: {
+    fontSize: '12px', color: '#C45000',
+    background: '#FFF5EE', borderRadius: '8px',
+    padding: '8px 12px', marginTop: '8px',
+  },
+  totalLine: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '16px 0', borderTop: '1px solid #F0F0F0', margin: '4px 0 20px',
+  },
+  totalLabel: { fontSize: '13px', color: '#999' },
+  totalValue: {
+    fontFamily: "'DM Serif Display', serif",
+    fontSize: '24px', color: '#1A1A1A',
+  },
+  submitBtn: {
+    width: '100%', padding: '16px',
+    background: '#1A1A1A', color: 'white',
+    border: 'none', borderRadius: '16px',
+    fontFamily: "'DM Sans', sans-serif",
+    fontSize: '15px', fontWeight: '500',
+    transition: 'all 0.2s ease',
+  },
+  input: {
+    width: '100%', padding: '13px 16px',
+    borderRadius: '12px', border: '1.5px solid #EBEBEB',
+    fontSize: '15px', fontFamily: "'DM Sans', sans-serif",
+    color: '#1A1A1A', outline: 'none', boxSizing: 'border-box',
+  },
+  inputSm: {
+    width: '100%', padding: '10px 12px',
+    borderRadius: '10px', border: '1.5px solid #EBEBEB',
+    fontSize: '13px', fontFamily: "'DM Sans', sans-serif",
+    color: '#1A1A1A', outline: 'none', boxSizing: 'border-box',
+  },
+  changeRow: {
+    fontSize: '13px', color: '#1A1A1A', marginTop: '10px',
+    padding: '10px 14px', background: '#F9F9F9', borderRadius: '10px',
+  },
+  creditToggle: {
+    display: 'flex', alignItems: 'center', gap: '10px',
+    padding: '12px 14px', borderRadius: '12px',
+    border: '1.5px solid #EBEBEB', cursor: 'pointer',
+    marginTop: '8px', transition: 'all 0.15s',
+  },
+  creditBadge: {
+    fontSize: '11px', fontWeight: '500',
+    background: '#E8F5EC', color: '#2E7D42',
+    padding: '2px 8px', borderRadius: '100px',
+  },
+  dueBreakdown: {
+    marginTop: '-12px', marginBottom: '20px',
+    background: '#F9F9F9', borderRadius: '12px', padding: '10px 14px',
+  },
+  dueRow: {
+    display: 'flex', justifyContent: 'space-between',
+    fontSize: '13px', color: '#999', padding: '3px 0',
+  },
+}

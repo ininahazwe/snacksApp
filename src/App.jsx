@@ -14,6 +14,7 @@ import StocksView from './views/StocksView'
 import UsersView from './views/UsersView'
 import BarcodeScanner from './components/BarcodeScanner'
 import SaleModal from './components/SaleModal'
+import CartSaleModal from './components/CartSaleModal'
 import NewProductModal from './components/NewProductModal'
 import Toast from './components/Toast'
 import { supabase } from './lib/supabase'
@@ -57,6 +58,8 @@ function AppLayout() {
 
   const [showScanner,  setShowScanner]  = useState(false)
   const [saleProduct,  setSaleProduct]  = useState(null)
+  const [cart,         setCart]         = useState([]) // achat multi-produits : [{ product, qty }]
+  const [showCart,     setShowCart]     = useState(false)
   const [newBarcode,   setNewBarcode]   = useState(null)
   const [toast,        setToast]        = useState(null)
   const [scanPulse,    setScanPulse]    = useState(false)
@@ -89,6 +92,20 @@ function AppLayout() {
   }
 
   const handleProductTap    = (product) => setSaleProduct(product)
+  // Ajoute un produit au panier (achat multi-produits) sans ouvrir la vente
+  // rapide à 1 produit — si le produit y est déjà, on incrémente sa quantité
+  // (dans la limite du stock disponible) plutôt que de dupliquer la ligne.
+  const handleAddToCart = (product) => {
+    setCart(cur => {
+      const existing = cur.find(c => c.product.id === product.id)
+      if (existing) {
+        const maxQty = product.stock ?? existing.qty
+        if (existing.qty >= maxQty) return cur
+        return cur.map(c => c.product.id === product.id ? { ...c, qty: c.qty + 1 } : c)
+      }
+      return [...cur, { product, qty: 1 }]
+    })
+  }
   const handleProductCreated = (product) => { setNewBarcode(null); showToast(`✓ "${product.name}" created`); setSaleProduct(product) }
   // Ne ferme plus le modal ici : SaleModal affiche désormais un écran de
   // confirmation avec le reçu, et se ferme lui-même via onClose (bouton "Done").
@@ -144,7 +161,7 @@ function AppLayout() {
               </RoleGuard>
             } />
             <Route path="/ventes"  element={<VentesView />} />
-            <Route path="/produits" element={<ProduitsView onProductTap={handleProductTap} />} />
+            <Route path="/produits" element={<ProduitsView onProductTap={handleProductTap} onAddToCart={handleAddToCart} cartProductIds={cart.map(c => c.product.id)} />} />
             <Route path="/clients" element={
               <RoleGuard requireGerant>
                 <ClientsView />
@@ -183,6 +200,26 @@ function AppLayout() {
         {showScanner  && <BarcodeScanner onDetected={handleBarcodeDetected} onClose={() => setShowScanner(false)} />}
         {newBarcode   && <NewProductModal barcode={newBarcode} onClose={() => setNewBarcode(null)} onCreated={handleProductCreated} />}
         {saleProduct  && <SaleModal product={saleProduct} onClose={() => setSaleProduct(null)} onSuccess={handleSaleSuccess} />}
+        {showCart     && <CartSaleModal cart={cart} setCart={setCart} onClose={() => setShowCart(false)} onSuccess={handleSaleSuccess} />}
+
+        {/* Barre panier flottante — visible dès qu'un produit y a été ajouté,
+            au-dessus de la nav du bas. Ouvre CartSaleModal pour choisir client/paiement. */}
+        {cart.length > 0 && !showCart && (
+            <button
+                onClick={() => setShowCart(true)}
+                style={{
+                  position:'fixed', bottom:'86px', left:'50%', transform:'translateX(-50%)',
+                  width:'calc(100% - 48px)', maxWidth:'382px', zIndex:21,
+                  background:'#1A1A1A', color:'white', border:'none', borderRadius:'100px',
+                  padding:'14px 20px', fontSize:'14px', fontWeight:'500', cursor:'pointer',
+                  fontFamily:"'DM Sans',sans-serif", display:'flex', alignItems:'center', justifyContent:'space-between',
+                  boxShadow:'0 8px 24px rgba(0,0,0,0.25)',
+                }}
+            >
+              <span>🧺 Cart · {cart.reduce((n, c) => n + c.qty, 0)} item{cart.reduce((n, c) => n + c.qty, 0) !== 1 ? 's' : ''}</span>
+              <span>Review →</span>
+            </button>
+        )}
         <Toast message={toast} />
       </div>
   )

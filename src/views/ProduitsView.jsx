@@ -4,7 +4,7 @@ import NewProductModal from '../components/NewProductModal'
 import { formatPrice } from '../lib/format'
 import { cacheProducts, getCachedProducts, onCacheUpdated } from '../lib/offlineCache'
 
-export default function ProduitsView({ onProductTap }) {
+export default function ProduitsView({ onProductTap, onAddToCart, cartProductIds = [] }) {
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -107,8 +107,24 @@ export default function ProduitsView({ onProductTap }) {
                   <div
                       key={p.id}
                       onClick={() => onProductTap && onProductTap(p)}
-                      style={{background:'white',borderRadius:'18px',border:'1px solid rgba(0,0,0,0.05)',boxShadow:'0 2px 12px rgba(0,0,0,0.04)',padding:'16px',cursor:'pointer',transition:'all 0.2s ease'}}
+                      style={{background:'white',borderRadius:'18px',border:'1px solid rgba(0,0,0,0.05)',boxShadow:'0 2px 12px rgba(0,0,0,0.04)',padding:'16px',cursor:'pointer',transition:'all 0.2s ease',position:'relative'}}
                   >
+                    {onAddToCart && (
+                        <button
+                            onClick={e => { e.stopPropagation(); onAddToCart(p) }}
+                            title="Add to cart"
+                            style={{
+                              position:'absolute', top:'10px', right:'10px', zIndex:1,
+                              width:'26px', height:'26px', borderRadius:'50%', border:'none',
+                              background: cartProductIds.includes(p.id) ? '#1A1A1A' : '#F5F5F5',
+                              color: cartProductIds.includes(p.id) ? 'white' : '#999',
+                              fontSize:'13px', cursor:'pointer',
+                              display:'flex', alignItems:'center', justifyContent:'center',
+                            }}
+                        >
+                          {cartProductIds.includes(p.id) ? '✓' : '+'}
+                        </button>
+                    )}
                     <div style={{width:'44px',height:'44px',borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'22px',marginBottom:'12px',background:(p.color??'#EEE')+'22'}}>
                       {p.emoji ?? '🍬'}
                     </div>

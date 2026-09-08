@@ -30,6 +30,20 @@ export function printReceipt(sale) {
 
   const escapeHtml = (v) => String(v ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
 
+  // Panier multi-produits (CartSaleModal) : sale.lines est un tableau d'articles,
+  // chacun avec sa propre remise éventuelle. Vente à 1 produit (SaleModal) :
+  // sale.lines est absent, on retombe sur l'unique ligne productName/qty/unitPrice
+  // comme avant — comportement inchangé.
+  const receiptLines = sale.lines ?? [{ productName, emoji, qty, unitPrice, amount: sale.amount, originalAmount, discountReason }]
+  const linesHtml = receiptLines.map(l => {
+    const lOriginal = l.originalAmount ?? null
+    const lAmount = l.amount ?? (l.unitPrice != null ? round2(l.unitPrice * (l.qty ?? 1)) : 0)
+    const discountRow = (lOriginal != null && lOriginal > lAmount)
+      ? `<div class="row" style="color:#888;"><span>Discount${l.discountReason ? ` (${escapeHtml(l.discountReason)})` : ''}</span><span style="text-decoration:line-through;">${formatPrice(lOriginal)}</span></div>`
+      : ''
+    return `<div class="row"><span>${escapeHtml(l.emoji ?? '')} ${escapeHtml(l.productName ?? '')} &times; ${l.qty ?? 1}</span><span>${formatPrice(lAmount)}</span></div>${discountRow}`
+  }).join('')
+
   win.document.write(`
     <!DOCTYPE html>
     <html>
@@ -58,8 +72,7 @@ export function printReceipt(sale) {
         <h1>${SHOP_NAME}</h1>
         <div class="sub">${escapeHtml(dateStr)}${sale.offline ? ' &middot; recorded offline' : ''}</div>
         <hr />
-        <div class="row"><span>${escapeHtml(emoji)} ${escapeHtml(productName)} &times; ${qty}</span><span>${formatPrice(unitPrice)}</span></div>
-        ${originalAmount != null && originalAmount > sale.amount ? `<div class="row" style="color:#888;"><span>Discount${discountReason ? ` (${escapeHtml(discountReason)})` : ''}</span><span style="text-decoration:line-through;">${formatPrice(originalAmount)}</span></div>` : ''}
+        ${linesHtml}
         <hr />
         <div class="row total"><span>Total</span><span>${formatPrice(sale.amount)} GH&#8373;</span></div>
         <div class="row"><span>Payment</span><span>${escapeHtml(typeLabel)}</span></div>

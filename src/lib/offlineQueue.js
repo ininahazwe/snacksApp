@@ -78,6 +78,7 @@ export async function syncOneSale(entry) {
   }
 
   const { error: saleError } = await supabase.from('sales').insert({
+    group_id: entry.group_id ?? null,
     product_id: entry.product_id,
     client_id: entry.client_id,
     user_id: entry.user_id,

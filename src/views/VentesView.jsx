@@ -14,6 +14,8 @@ export default function VentesView() {
   const [profitData, setProfitData] = useState(null)
   const [saleToCancel, setSaleToCancel] = useState(null)
   const [cancelling, setCancelling] = useState(false)
+  const [groupToCancel, setGroupToCancel] = useState(null)
+  const [cancellingGroup, setCancellingGroup] = useState(false)
   const [usersById, setUsersById] = useState({})
   const [visibleCount, setVisibleCount] = useState(10)
   const [showCancelled, setShowCancelled] = useState(false)
@@ -30,7 +32,7 @@ export default function VentesView() {
     // part sur demande plutôt que d'être définitivement supprimées.
     const { data } = await supabase
         .from('sales')
-        .select('id, product_id, client_id, user_id, qty, amount, type, created_at, debt_added, debt_repaid, credit_used, credit_created, cancelled_at, batch_id, batch_was_exhausted, original_amount, discount_reason, products(name, emoji, price, cost), clients(name)')
+        .select('id, product_id, client_id, user_id, qty, amount, type, created_at, debt_added, debt_repaid, credit_used, credit_created, cancelled_at, batch_id, batch_was_exhausted, original_amount, discount_reason, group_id, products(name, emoji, price, cost), clients(name)')
         .order('created_at', { ascending: false })
     setSales(data ?? [])
     setLoading(false)
@@ -127,80 +129,85 @@ export default function VentesView() {
   //
   // La vente n'est plus supprimée (perte d'information) mais marquée cancelled_at :
   // elle reste visible dans l'historique du client, barrée et taguée "Cancelled".
+  // Annule UNE ligne de vente (restaure stock + lot, défait dette/avoir du
+  // client, marque la ligne cancelled_at). Fonction pure sur `sale` — ne
+  // touche à aucun état du composant — pour pouvoir être appelée aussi bien
+  // pour annuler une seule ligne que pour annuler, une par une, toutes les
+  // lignes d'un même panier (group_id) sans dupliquer cette logique.
+  const cancelSaleRow = async (sale) => {
+    // 1. Restaurer le stock du produit (uniquement si la ligne correspond à un produit)
+    if (sale.product_id) {
+      const { data: product } = await supabase
+          .from('products')
+          .select('stock')
+          .eq('id', sale.product_id)
+          .single()
+
+      const newStock = (product?.stock ?? 0) + sale.qty
+
+      await supabase
+          .from('products')
+          .update({ stock: newStock })
+          .eq('id', sale.product_id)
+
+      // 2. Journaliser le mouvement de stock inverse, RATTACHÉ AU LOT D'ORIGINE
+      // (sale.batch_id) et à la vente qu'on annule (sale_id) — sans ce
+      // rattachement, le décompte du lot resterait faux et un lot déjà
+      // épuisé ne pourrait jamais être "rouvert" ci-dessous.
+      await supabase
+          .from('stock_movements')
+          .insert({
+            product_id: sale.product_id,
+            batch_id: sale.batch_id ?? null,
+            sale_id: sale.id,
+            delta: sale.qty,
+            reason: 'Sale cancelled',
+          })
+
+      // 3. Si CETTE vente précise avait épuisé un lot, on le rouvre : sinon le lot
+      // resterait marqué "exhausted" pour toujours malgré l'unité rendue, et le
+      // FIFO irait piocher dans le lot suivant au lieu du bon.
+      if (sale.batch_was_exhausted && sale.batch_id) {
+        await supabase
+            .from('stock_batches')
+            .update({ exhausted_at: null, duration_days: null })
+            .eq('id', sale.batch_id)
+      }
+    }
+
+    // 4. Défaire l'effet exact de la transaction sur la dette et l'avoir du client
+    const hasBalanceEffect = (sale.debt_added || sale.debt_repaid || sale.credit_used || sale.credit_created)
+    if (sale.client_id && hasBalanceEffect) {
+      const { data: client } = await supabase
+          .from('clients')
+          .select('debt, credit')
+          .eq('id', sale.client_id)
+          .single()
+
+      const newDebt = round2(Math.max(0, (client?.debt ?? 0) - (sale.debt_added ?? 0) + (sale.debt_repaid ?? 0)))
+      const newCredit = round2(Math.max(0, (client?.credit ?? 0) - (sale.credit_created ?? 0) + (sale.credit_used ?? 0)))
+
+      await supabase
+          .from('clients')
+          .update({ debt: newDebt, credit: newCredit })
+          .eq('id', sale.client_id)
+    }
+
+    // 5. Marquer la transaction comme annulée (soft-delete) au lieu de la supprimer :
+    // on garde une trace d'audit complète plutôt que de faire disparaître la
+    // transaction. Le reste de l'app filtre cancelled_at pour ne pas compter
+    // ces ventes dans les totaux/le dashboard.
+    await supabase
+        .from('sales')
+        .update({ cancelled_at: new Date().toISOString() })
+        .eq('id', sale.id)
+  }
+
   const handleConfirmCancel = async () => {
     if (!saleToCancel) return
     setCancelling(true)
-
-    const sale = saleToCancel
-
     try {
-      // 1. Restaurer le stock du produit (uniquement si la ligne correspond à un produit)
-      if (sale.product_id) {
-        const { data: product } = await supabase
-            .from('products')
-            .select('stock')
-            .eq('id', sale.product_id)
-            .single()
-
-        const newStock = (product?.stock ?? 0) + sale.qty
-
-        await supabase
-            .from('products')
-            .update({ stock: newStock })
-            .eq('id', sale.product_id)
-
-        // 2. Journaliser le mouvement de stock inverse, RATTACHÉ AU LOT D'ORIGINE
-        // (sale.batch_id) et à la vente qu'on annule (sale_id) — sans ce
-        // rattachement, le décompte du lot resterait faux et un lot déjà
-        // épuisé ne pourrait jamais être "rouvert" ci-dessous.
-        await supabase
-            .from('stock_movements')
-            .insert({
-              product_id: sale.product_id,
-              batch_id: sale.batch_id ?? null,
-              sale_id: sale.id,
-              delta: sale.qty,
-              reason: 'Sale cancelled',
-            })
-
-        // 3. Si CETTE vente précise avait épuisé un lot, on le rouvre : sinon le lot
-        // resterait marqué "exhausted" pour toujours malgré l'unité rendue, et le
-        // FIFO irait piocher dans le lot suivant au lieu du bon.
-        if (sale.batch_was_exhausted && sale.batch_id) {
-          await supabase
-              .from('stock_batches')
-              .update({ exhausted_at: null, duration_days: null })
-              .eq('id', sale.batch_id)
-        }
-      }
-
-      // 4. Défaire l'effet exact de la transaction sur la dette et l'avoir du client
-      const hasBalanceEffect = (sale.debt_added || sale.debt_repaid || sale.credit_used || sale.credit_created)
-      if (sale.client_id && hasBalanceEffect) {
-        const { data: client } = await supabase
-            .from('clients')
-            .select('debt, credit')
-            .eq('id', sale.client_id)
-            .single()
-
-        const newDebt = round2(Math.max(0, (client?.debt ?? 0) - (sale.debt_added ?? 0) + (sale.debt_repaid ?? 0)))
-        const newCredit = round2(Math.max(0, (client?.credit ?? 0) - (sale.credit_created ?? 0) + (sale.credit_used ?? 0)))
-
-        await supabase
-            .from('clients')
-            .update({ debt: newDebt, credit: newCredit })
-            .eq('id', sale.client_id)
-      }
-
-      // 5. Marquer la transaction comme annulée (soft-delete) au lieu de la supprimer :
-      // on garde une trace d'audit complète plutôt que de faire disparaître la
-      // transaction. Le reste de l'app filtre cancelled_at pour ne pas compter
-      // ces ventes dans les totaux/le dashboard.
-      await supabase
-          .from('sales')
-          .update({ cancelled_at: new Date().toISOString() })
-          .eq('id', sale.id)
-
+      await cancelSaleRow(saleToCancel)
       setSaleToCancel(null)
       fetchSales()
     } catch (err) {
@@ -208,6 +215,27 @@ export default function VentesView() {
       console.error(err)
     } finally {
       setCancelling(false)
+    }
+  }
+
+  // Annule tout un panier (achat multi-produits) d'un coup : toutes les
+  // lignes actives partageant le même group_id, une par une, avec la même
+  // logique que l'annulation d'une seule ligne ci-dessus.
+  const handleConfirmCancelGroup = async () => {
+    if (!groupToCancel) return
+    setCancellingGroup(true)
+    try {
+      const rows = sales.filter(s => s.group_id === groupToCancel && !s.cancelled_at)
+      for (const row of rows) {
+        await cancelSaleRow(row)
+      }
+      setGroupToCancel(null)
+      fetchSales()
+    } catch (err) {
+      alert("Erreur lors de l'annulation du panier")
+      console.error(err)
+    } finally {
+      setCancellingGroup(false)
     }
   }
 
@@ -239,7 +267,7 @@ export default function VentesView() {
   const hasMore = visibleCount < filtered.length
 
   const handleExportCsv = () => {
-    const headers = ['Date', 'Produit', 'Client', 'Vendeur', 'Quantité', 'Montant (GH₵)', 'Prix initial (GH₵)', 'Motif réduction', 'Type', 'Statut']
+    const headers = ['Date', 'Produit', 'Client', 'Vendeur', 'Quantité', 'Montant (GH₵)', 'Prix initial (GH₵)', 'Motif réduction', 'Type', 'Statut', 'ID Panier']
     const rows = filtered.map(s => [
       new Date(s.created_at).toLocaleString('fr-FR'),
       s.products?.name ?? '',
@@ -251,6 +279,7 @@ export default function VentesView() {
       s.discount_reason ?? '',
       s.type,
       s.cancelled_at ? 'Annulée' : 'Active',
+      s.group_id ?? '',
     ])
     const stamp = new Date().toISOString().slice(0, 10)
     downloadCsv(`ventes_${stamp}.csv`, headers, rows)
@@ -427,6 +456,11 @@ export default function VentesView() {
                               🏷️ Discounted{s.discount_reason ? ` — ${s.discount_reason}` : ''}
                             </div>
                         )}
+                        {s.group_id && (
+                            <div style={{ fontSize: '10px', color: '#999', marginTop: '1px' }}>
+                              🧺 Part of a multi-item sale
+                            </div>
+                        )}
                       </div>
                       <div style={{ textAlign: 'right', flexShrink: 0 }}>
                         {s.original_amount != null && (
@@ -463,6 +497,15 @@ export default function VentesView() {
                               style={iconActionStyles}
                           >
                             🗑️
+                          </button>
+                      )}
+                      {!isCancelled && s.group_id && (
+                          <button
+                              onClick={() => setGroupToCancel(s.group_id)}
+                              title="Cancel entire cart"
+                              style={iconActionStyles}
+                          >
+                            🧺✕
                           </button>
                       )}
                     </div>
@@ -664,6 +707,82 @@ export default function VentesView() {
                       }}
                   >
                     {cancelling ? 'Cancelling…' : 'Cancel sale'}
+                  </button>
+                </div>
+              </div>
+            </div>
+        )}
+
+        {/* Modal de confirmation d'annulation de tout un panier (achat multi-produits) */}
+        {groupToCancel && (
+            <div
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  background: 'rgba(0,0,0,0.4)',
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  justifyContent: 'center',
+                  zIndex: 1000,
+                }}
+                onClick={() => !cancellingGroup && setGroupToCancel(null)}
+            >
+              <div
+                  style={{
+                    background: 'white',
+                    borderRadius: '28px 28px 0 0',
+                    padding: '24px 20px 28px',
+                    width: '100%',
+                    maxWidth: '430px',
+                    boxSizing: 'border-box',
+                  }}
+                  onClick={e => e.stopPropagation()}
+              >
+                <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '18px', color: '#1A1A1A', marginBottom: '8px' }}>
+                  Cancel this entire cart?
+                </div>
+                <div style={{ fontSize: '13px', color: '#999', marginBottom: '16px', lineHeight: '1.5' }}>
+                  {sales.filter(s => s.group_id === groupToCancel && !s.cancelled_at).length} item(s) from this multi-product sale will be cancelled.
+                  Stock will be restored for each, and the client's debt and store credit will be reversed to exactly what they were before this transaction.
+                  The records stay in the history, marked as cancelled.
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                      onClick={() => setGroupToCancel(null)}
+                      disabled={cancellingGroup}
+                      style={{
+                        flex: 1,
+                        padding: '12px',
+                        background: '#F5F5F5',
+                        color: '#1A1A1A',
+                        border: 'none',
+                        borderRadius: '10px',
+                        fontFamily: "'DM Sans', sans-serif",
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        cursor: cancellingGroup ? 'default' : 'pointer',
+                      }}
+                  >
+                    Keep cart
+                  </button>
+                  <button
+                      onClick={handleConfirmCancelGroup}
+                      disabled={cancellingGroup}
+                      style={{
+                        flex: 1,
+                        padding: '12px',
+                        background: '#E84B6E',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '10px',
+                        fontFamily: "'DM Sans', sans-serif",
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        cursor: cancellingGroup ? 'default' : 'pointer',
+                        opacity: cancellingGroup ? 0.7 : 1,
+                      }}
+                  >
+                    {cancellingGroup ? 'Cancelling…' : 'Cancel entire cart'}
                   </button>
                 </div>
               </div>
