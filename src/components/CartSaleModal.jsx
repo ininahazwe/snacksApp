@@ -25,13 +25,7 @@ import { cacheClients, getCachedClients, cacheProducts, getCachedProducts, notif
 // déjà existante, sans aucun changement à cette logique.
 export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
   const { user } = useAuth()
-  const [lines, setLines] = useState(() => cart.map(c => ({
-    product: c.product,
-    qty: c.qty,
-    isDiscounted: false,
-    discountedPrice: '',
-    discountReason: '',
-  })))
+  const [discounts, setDiscounts] = useState({}) // { [productId]: { isDiscounted, discountedPrice, discountReason } }
   const [selectedClient, setSelectedClient] = useState(null)
   const [paymentType, setPaymentType] = useState('cash')
   const [clients, setClients] = useState([])
@@ -58,17 +52,25 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
   }
 
   // -- Calculs par ligne (même formule que SaleModal, appliquée à chaque produit) --
-  const computedLines = lines.map(l => {
-    const parsedDiscountPrice = parseFloat(l.discountedPrice)
-    const discountInvalid = l.isDiscounted && (
-        l.discountedPrice === '' || isNaN(parsedDiscountPrice) || parsedDiscountPrice < 0 || parsedDiscountPrice >= l.product.price
+  // `cart` (prop) reste la seule source de vérité pour "quels produits, quelle
+  // quantité" — `discounts` ne fait qu'ajouter par-dessus la remise éventuelle
+  // saisie dans ce formulaire, sans jamais dupliquer product/qty.
+  const computedLines = cart.map(c => {
+    const d = discounts[c.product.id] ?? { isDiscounted: false, discountedPrice: '', discountReason: '' }
+    const parsedDiscountPrice = parseFloat(d.discountedPrice)
+    const discountInvalid = d.isDiscounted && (
+        d.discountedPrice === '' || isNaN(parsedDiscountPrice) || parsedDiscountPrice < 0 || parsedDiscountPrice >= c.product.price
     )
-    const hasValidDiscount = l.isDiscounted && !discountInvalid
-    const effectiveUnitPrice = hasValidDiscount ? parsedDiscountPrice : l.product.price
-    const total = round2(effectiveUnitPrice * l.qty)
-    const originalTotal = round2(l.product.price * l.qty)
-    const insufficientStock = l.qty > (l.product.stock ?? 0)
-    return { ...l, discountInvalid, hasValidDiscount, effectiveUnitPrice, total, originalTotal, insufficientStock }
+    const hasValidDiscount = d.isDiscounted && !discountInvalid
+    const effectiveUnitPrice = hasValidDiscount ? parsedDiscountPrice : c.product.price
+    const total = round2(effectiveUnitPrice * c.qty)
+    const originalTotal = round2(c.product.price * c.qty)
+    const insufficientStock = c.qty > (c.product.stock ?? 0)
+    return {
+      product: c.product, qty: c.qty,
+      isDiscounted: d.isDiscounted, discountedPrice: d.discountedPrice, discountReason: d.discountReason,
+      discountInvalid, hasValidDiscount, effectiveUnitPrice, total, originalTotal, insufficientStock,
+    }
   })
 
   const cartTotal = round2(computedLines.reduce((sum, l) => sum + l.total, 0))
@@ -89,8 +91,15 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
 
   const filteredClients = clients.filter(c => c.name.toLowerCase().includes(clientSearch.toLowerCase()))
 
-  const updateLine = (idx, patch) => setLines(ls => ls.map((l, i) => i === idx ? { ...l, ...patch } : l))
-  const removeLine = (idx) => setLines(ls => ls.filter((_, i) => i !== idx))
+  // Quantité et suppression modifient directement `cart` (via la prop setCart) :
+  // c'est ce qui garde la barre panier de App.jsx et ce modal synchronisés à
+  // tout instant, y compris si l'utilisateur ferme le modal sans valider.
+  const updateQty = (productId, qty) => setCart(cur => cur.map(c => c.product.id === productId ? { ...c, qty } : c))
+  const removeLine = (productId) => setCart(cur => cur.filter(c => c.product.id !== productId))
+  const updateDiscount = (productId, patch) => setDiscounts(cur => ({
+    ...cur,
+    [productId]: { isDiscounted: false, discountedPrice: '', discountReason: '', ...cur[productId], ...patch },
+  }))
 
   // Répartit un montant (dette ajoutée / avoir consommé / avoir créé) sur les
   // lignes actives au prorata de leur part du panier. Le reste (arrondi) est
@@ -380,16 +389,16 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
                       )}
                     </div>
                     <div style={styles.qtyControlSm}>
-                      <button style={styles.qtyBtnSm} onClick={() => updateLine(i, { qty: Math.max(1, l.qty - 1) })}>−</button>
+                      <button style={styles.qtyBtnSm} onClick={() => updateQty(l.product.id, Math.max(1, l.qty - 1))}>−</button>
                       <span style={styles.qtyValueSm}>{l.qty}</span>
-                      <button style={styles.qtyBtnSm} onClick={() => updateLine(i, { qty: l.qty + 1 })}>+</button>
+                      <button style={styles.qtyBtnSm} onClick={() => updateQty(l.product.id, l.qty + 1)}>+</button>
                     </div>
-                    <button onClick={() => removeLine(i)} style={styles.removeBtn} title="Remove from cart">✕</button>
+                    <button onClick={() => removeLine(l.product.id)} style={styles.removeBtn} title="Remove from cart">✕</button>
                   </div>
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#999', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={l.isDiscounted} onChange={e => updateLine(i, { isDiscounted: e.target.checked })} />
+                      <input type="checkbox" checked={l.isDiscounted} onChange={e => updateDiscount(l.product.id, { isDiscounted: e.target.checked })} />
                       Discounted item
                     </label>
                     <span style={{ fontSize: '13px', fontWeight: '600', color: '#1A1A1A' }}>{formatPrice(l.total)} GH₵</span>
@@ -404,13 +413,13 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
                             inputMode="decimal"
                             placeholder={'New unit price (normally ' + formatPrice(l.product.price) + ')'}
                             value={l.discountedPrice}
-                            onChange={e => updateLine(i, { discountedPrice: e.target.value })}
+                            onChange={e => updateDiscount(l.product.id, { discountedPrice: e.target.value })}
                         />
                         <input
                             style={{ ...styles.inputSm, marginTop: '6px' }}
                             placeholder="Reason (optional)"
                             value={l.discountReason}
-                            onChange={e => updateLine(i, { discountReason: e.target.value })}
+                            onChange={e => updateDiscount(l.product.id, { discountReason: e.target.value })}
                         />
                         {l.discountInvalid && (
                             <div style={styles.warning}>⚠ Enter a price lower than {formatPrice(l.product.price)} GH₵</div>
