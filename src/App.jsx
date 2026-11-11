@@ -22,8 +22,8 @@ import { getCachedProducts } from './lib/offlineCache'
 import { useOfflineSync } from './hooks/useOfflineSync'
 import { st } from './styles/styles.js'
 
-// Navigation : vendeur voit seulement Sales + Products
-// Gérant voit tout
+// Navigation : cashier voit seulement Sales + Products
+// Manager voit tout sauf Team ; admin voit tout (dont Team = gestion des comptes)
 const NAV_ITEMS = [
   {
     path: '/', label: 'Dashboard', gerantOnly: true,
@@ -46,7 +46,7 @@ const NAV_ITEMS = [
     icon: (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>),
   },
   {
-    path: '/team', label: 'Team', gerantOnly: true,
+    path: '/team', label: 'Team', adminOnly: true,
     icon: (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>),
   },
 ]
@@ -54,7 +54,7 @@ const NAV_ITEMS = [
 function AppLayout() {
   const location  = useLocation()
   const navigate  = useNavigate()
-  const { logout, user, role, estGerant } = useAuth()
+  const { logout, user, role, estGerant, estAdmin } = useAuth()
 
   const [showScanner,  setShowScanner]  = useState(false)
   const [saleProduct,  setSaleProduct]  = useState(null)
@@ -88,7 +88,8 @@ function AppLayout() {
 
     const { data } = await supabase.from('products').select('*').eq('barcode', barcode).single()
     if (data) setSaleProduct(data)
-    else setNewBarcode(barcode)
+    else if (estGerant) setNewBarcode(barcode)
+    else showToast('Unknown barcode — ask a manager to add this product')
   }
 
   const handleProductTap    = (product) => setSaleProduct(product)
@@ -111,11 +112,13 @@ function AppLayout() {
   // confirmation avec le reçu, et se ferme lui-même via onClose (bouton "Done").
   const handleSaleSuccess   = (msg)     => { showToast(msg) }
 
-  // Vendeur atterrit sur /ventes par défaut
+  // Cashier atterrit sur /ventes par défaut
   const defaultPath = estGerant ? '/' : '/ventes'
 
-  // Items de nav filtrés selon le rôle
-  const navItems = estGerant ? NAV_ITEMS : NAV_ITEMS.filter(i => !i.gerantOnly)
+  // Items de nav filtrés selon le rôle (Team = admin ; le reste « gérant » = manager ou admin)
+  const navItems = NAV_ITEMS.filter(i => i.adminOnly ? estAdmin : (i.gerantOnly ? estGerant : true))
+
+  const roleLabel = role === 'admin' ? '🛡️ Admin' : role === 'manager' ? '👑 Manager' : '🏪 Cashier'
 
   return (
       <div style={st.app}>
@@ -127,7 +130,7 @@ function AppLayout() {
             <div>
               <div style={st.brand}>Store<span style={st.brandDot} /></div>
               <div style={st.roleBadge}>
-                {role === 'gerant' ? '👑 Manager' : '🏪 Cashier'} · {user?.email}
+                {roleLabel} · {user?.email}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -173,7 +176,7 @@ function AppLayout() {
               </RoleGuard>
             } />
             <Route path="/team" element={
-              <RoleGuard requireGerant>
+              <RoleGuard requireAdmin>
                 <UsersView />
               </RoleGuard>
             } />

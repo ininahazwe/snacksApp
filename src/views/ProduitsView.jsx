@@ -3,8 +3,10 @@ import { supabase } from '../lib/supabase'
 import NewProductModal from '../components/NewProductModal'
 import { formatPrice } from '../lib/format'
 import { cacheProducts, getCachedProducts, onCacheUpdated } from '../lib/offlineCache'
+import { useAuth } from '../context/AuthContext'
 
 export default function ProduitsView({ onProductTap, onAddToCart, cartProductIds = [] }) {
+  const { estGerant } = useAuth()
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -52,12 +54,15 @@ export default function ProduitsView({ onProductTap, onAddToCart, cartProductIds
         {/* Header avec titre + bouton New */}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
           <p style={{fontFamily:"'DM Serif Display',serif",fontSize:'18px',color:'#1A1A1A',margin:0}}>Products</p>
-          <button
-              onClick={() => setShowNewProduct(true)}
-              style={{background:'#1A1A1A',color:'white',border:'none',borderRadius:'100px',padding:'8px 18px',fontSize:'13px',fontWeight:'500',cursor:'pointer',fontFamily:"'DM Sans',sans-serif",display:'flex',alignItems:'center',gap:'6px'}}
-          >
-            <span style={{fontSize:'16px',lineHeight:1}}>+</span> New
-          </button>
+          {/* Création de produit : manager/admin uniquement */}
+          {estGerant && (
+            <button
+                onClick={() => setShowNewProduct(true)}
+                style={{background:'#1A1A1A',color:'white',border:'none',borderRadius:'100px',padding:'8px 18px',fontSize:'13px',fontWeight:'500',cursor:'pointer',fontFamily:"'DM Sans',sans-serif",display:'flex',alignItems:'center',gap:'6px'}}
+            >
+              <span style={{fontSize:'16px',lineHeight:1}}>+</span> New
+            </button>
+          )}
         </div>
 
         {/* Tabs de catégories */}
@@ -139,7 +144,7 @@ export default function ProduitsView({ onProductTap, onAddToCart, cartProductIds
         )}
 
         {/* Modal création produit sans code-barres */}
-        {showNewProduct && (
+        {estGerant && showNewProduct && (
             <NewProductModal
                 barcode={null}
                 onClose={() => setShowNewProduct(false)}

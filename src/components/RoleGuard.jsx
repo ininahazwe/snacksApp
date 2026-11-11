@@ -1,18 +1,26 @@
 import { useAuth } from '../context/AuthContext'
 
 // Affiche le contenu uniquement si l'utilisateur a le rôle requis
+//   requireGerant → manager ou admin
+//   requireAdmin  → admin uniquement
 // Sinon affiche un écran "Access restricted"
-export default function RoleGuard({ requireGerant, children, fallback }) {
-  const { estGerant, loading } = useAuth()
+// (Confort d'affichage uniquement : la vraie protection est dans les règles RLS.)
+export default function RoleGuard({ requireGerant, requireAdmin, children, fallback }) {
+  const { estGerant, estAdmin, loading } = useAuth()
 
   if (loading) return null
 
-  if (requireGerant && !estGerant) {
+  const denied = (requireAdmin && !estAdmin) || (requireGerant && !estGerant)
+  if (denied) {
     return fallback ?? (
       <div style={styles.container}>
         <div style={styles.icon}>🔒</div>
         <div style={styles.title}>Access restricted</div>
-        <div style={styles.sub}>This section is only available to managers.</div>
+        <div style={styles.sub}>
+          {requireAdmin
+            ? 'This section is only available to administrators.'
+            : 'This section is only available to managers.'}
+        </div>
       </div>
     )
   }

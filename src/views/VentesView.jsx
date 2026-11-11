@@ -3,8 +3,10 @@ import { supabase } from '../lib/supabase'
 import { formatPrice, round2 } from '../lib/format'
 import { printReceipt } from '../lib/receipt'
 import { downloadCsv } from '../lib/exportCsv'
+import { useAuth } from '../context/AuthContext'
 
 export default function VentesView() {
+  const { estGerant } = useAuth()
   const [sales, setSales] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('toutes') // toutes, payees, dettes
@@ -39,11 +41,12 @@ export default function VentesView() {
   }
 
   // Récupérer les vendeurs (email) pour affichage — pas de FK déclarée
-  // entre sales.user_id et users_view, donc on fait un fetch à part
-  // et on associe en mémoire par id.
+  // entre sales.user_id et profiles, donc on fait un fetch à part
+  // et on associe en mémoire par id. (RLS : manager/admin voient tous les
+  // profils, un cashier ne voit que le sien.)
   const fetchUsers = async () => {
     const { data } = await supabase
-        .from('users_view')
+        .from('profiles')
         .select('id, email')
     const map = {}
     ;(data ?? []).forEach(u => { map[u.id] = u.email })
@@ -290,7 +293,10 @@ export default function VentesView() {
   return (
       <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
         {/* Header */}
-        <p style={{ fontFamily: "'DM Serif Display', serif", fontSize: '18px', color: '#1A1A1A', marginBottom: '16px' }}>Sales</p>
+        <p style={{ fontFamily: "'DM Serif Display', serif", fontSize: '18px', color: '#1A1A1A', marginBottom: estGerant ? '16px' : '4px' }}>Sales</p>
+        {!estGerant && (
+            <p style={{ fontSize: '12px', color: '#999', margin: '0 0 16px' }}>Your sales only</p>
+        )}
 
         {/* Filtres par type */}
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
@@ -488,7 +494,7 @@ export default function VentesView() {
                             🖨️
                           </button>
                       )}
-                      {isCancelled ? (
+                      {!estGerant ? null : isCancelled ? (
                           <div style={{ width: '27px', flexShrink: 0 }} />
                       ) : (
                           <button
@@ -499,7 +505,7 @@ export default function VentesView() {
                             🗑️
                           </button>
                       )}
-                      {!isCancelled && s.group_id && (
+                      {estGerant && !isCancelled && s.group_id && (
                           <button
                               onClick={() => setGroupToCancel(s.group_id)}
                               title="Cancel entire cart"
@@ -540,6 +546,7 @@ export default function VentesView() {
         )}
 
         {/* CALENDRIER CALCUL PROFIT */}
+        {estGerant && (
         <div style={{ background: '#F9F9F9', borderRadius: '18px', padding: '20px', marginBottom: '24px' }}>
           <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '16px', color: '#1A1A1A', marginBottom: '16px' }}>📅 Profit Calculator</div>
 
@@ -632,6 +639,7 @@ export default function VentesView() {
               </div>
           )}
         </div>
+        )}
 
         {/* Modal de confirmation d'annulation */}
         {saleToCancel && (

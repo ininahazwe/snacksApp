@@ -1,67 +1,66 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 
-const ROLES = ['gerant', 'vendeur']
+// Écran réservé à l'administrateur (route protégée + fonctions SQL list_team /
+// set_user_role / set_user_active qui re-vérifient le rôle côté base).
+
+const ROLE_META = {
+  admin:   { icon: '🛡️', label: 'Admin',   sub: 'All rights + accounts' },
+  manager: { icon: '👑', label: 'Manager', sub: 'Stock, sales, customers' },
+  cashier: { icon: '🏪', label: 'Cashier', sub: 'Sells, sees own sales' },
+}
+const ROLES = ['admin', 'manager', 'cashier']
 
 export default function UsersView() {
   const { user: currentUser } = useAuth()
-  const [users, setUsers]         = useState([])
-  const [loading, setLoading]     = useState(true)
-  const [showAdd, setShowAdd]     = useState(false)
-  const [newRole, setNewRole]     = useState('vendeur')
-  const [updatingId, setUpdatingId] = useState(null)
+  const [users, setUsers]           = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [loadError, setLoadError]   = useState(null)
+  const [showAdd, setShowAdd]       = useState(false)
+  const [busyId, setBusyId]         = useState(null)
+  const [actionError, setActionError] = useState(null)
 
-  useEffect(() => { fetchUsers() }, [])
-
-  const fetchUsers = async () => {
-    // Utilise la vue users_view créée dans le SQL
-    const { data, error } = await supabase
-        .from('users_view')
-        .select('*')
-        .order('created_at', { ascending: false })
-
+  const fetchUsers = useCallback(async () => {
+    const { data, error } = await supabase.rpc('list_team')
     if (error) {
-      // Fallback : si la vue n'existe pas encore, afficher un message
-      console.error('users_view inaccessible:', error)
+      console.error('list_team:', error)
+      setLoadError(error.message || 'Unable to load the team')
       setUsers([])
     } else {
+      setLoadError(null)
       setUsers(data ?? [])
     }
     setLoading(false)
-  }
+  }, [])
+
+  useEffect(() => { fetchUsers() }, [fetchUsers])
 
   const changerRole = async (userId, nouveauRole) => {
-    setUpdatingId(userId)
-    try {
-      // Utiliser la RPC qu'on vient de créer
-      const { data, error } = await supabase.rpc('update_user_role', {
-        target_user_id: userId,
-        new_role: nouveauRole,
-      })
-
-      if (error) {
-        console.error('RPC error:', error)
-        alert('Erreur: ' + (error.message || 'Impossible de changer le rôle'))
-      } else if (data?.error) {
-        alert('Erreur: ' + data.error)
-      } else {
-        // Succès: mettre à jour l'UI
-        setUsers(us => us.map(u => u.id === userId ? { ...u, role: nouveauRole } : u))
-      }
-    } catch (err) {
-      console.error('Erreur changement rôle:', err)
-      alert('Erreur: ' + err.message)
-    }
-    setUpdatingId(null)
+    setBusyId(userId)
+    setActionError(null)
+    const { error } = await supabase.rpc('set_user_role', { target_user_id: userId, new_role: nouveauRole })
+    if (error) setActionError(error.message || 'Unable to change the role')
+    else setUsers(us => us.map(u => u.id === userId ? { ...u, role: nouveauRole } : u))
+    setBusyId(null)
   }
 
-
+  const changerActif = async (userId, actif) => {
+    setBusyId(userId)
+    setActionError(null)
+    const { error } = await supabase.rpc('set_user_active', { target_user_id: userId, is_active: actif })
+    if (error) setActionError(error.message || 'Unable to update the account')
+    else setUsers(us => us.map(u => u.id === userId ? { ...u, active: actif } : u))
+    setBusyId(null)
+  }
 
   const formatDate = (iso) => iso ? new Date(iso).toLocaleDateString('en', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'
   const formatLastLogin = (iso) => iso ? new Date(iso).toLocaleDateString('en', { day: '2-digit', month: 'short' }) : 'Never'
 
   if (loading) return <div style={s.loading}>Loading…</div>
+
+  const pending  = users.filter(u => !u.active)
+  const managers = users.filter(u => u.active && (u.role === 'manager' || u.role === 'admin'))
 
   return (
       <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
@@ -70,62 +69,81 @@ export default function UsersView() {
           <button style={s.addBtn} onClick={() => setShowAdd(true)}>+ Add user</button>
         </div>
 
-        <div style={s.kpiRow}>
+        <div style={{ ...s.kpiRow, gridTemplateColumns: '1fr 1fr 1fr' }}>
           <div style={s.kpiCard}>
-            <div style={s.kpiLabel}>Total users</div>
-            <div style={s.kpiValue}>{users.length}</div>
+            <div style={s.kpiLabel}>Active</div>
+            <div style={s.kpiValue}>{users.length - pending.length}</div>
           </div>
           <div style={s.kpiCard}>
             <div style={s.kpiLabel}>Managers</div>
-            <div style={s.kpiValue}>{users.filter(u => u.role === 'gerant').length}</div>
+            <div style={s.kpiValue}>{managers.length}</div>
+          </div>
+          <div style={s.kpiCard}>
+            <div style={s.kpiLabel}>Pending</div>
+            <div style={{ ...s.kpiValue, color: pending.length > 0 ? '#C45000' : '#1A1A1A' }}>{pending.length}</div>
           </div>
         </div>
 
-        {users.length === 0 ? (
+        {actionError && <div style={s.errorMsg}>{actionError}</div>}
+
+        {loadError ? (
+            <div style={s.empty}>
+              <div style={{ fontSize: '32px', marginBottom: '12px' }}>⚠️</div>
+              {loadError}
+              <div style={{ marginTop: '8px', fontSize: '12px' }}>
+                Make sure <code style={s.code}>phase1_roles_securite.sql</code> has been run in the Supabase SQL Editor.
+              </div>
+            </div>
+        ) : users.length === 0 ? (
             <div style={s.empty}>
               <div style={{ fontSize: '32px', marginBottom: '12px' }}>👤</div>
-              No users found — make sure to run supabase-migration-phase5.sql
+              No users found
             </div>
         ) : (
             <div style={s.card}>
-              {users.map((u, i) => (
-                  <div key={u.id} style={{ ...s.userRow, borderBottom: i < users.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                    <div style={s.avatar}>{u.email?.charAt(0).toUpperCase()}</div>
-                    <div style={s.userInfo}>
-                      <div style={s.userEmail}>
-                        {u.email}
-                        {u.id === currentUser?.id && <span style={s.youBadge}>you</span>}
+              {users.map((u, i) => {
+                const isSelf = u.id === currentUser?.id
+                const busy = busyId === u.id
+                return (
+                    <div key={u.id} style={{ ...s.userRow, opacity: u.active ? 1 : 0.75, borderBottom: i < users.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
+                      <div style={s.avatar}>{u.email?.charAt(0).toUpperCase()}</div>
+                      <div style={s.userInfo}>
+                        <div style={s.userEmail}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.email}</span>
+                          {isSelf && <span style={s.youBadge}>you</span>}
+                          {!u.active && <span style={x.pendingBadge}>pending</span>}
+                        </div>
+                        <div style={s.userMeta}>Joined {formatDate(u.created_at)} · Last login {formatLastLogin(u.last_sign_in_at)}</div>
                       </div>
-                      <div style={s.userMeta}>Joined {formatDate(u.created_at)} · Last login {formatLastLogin(u.last_sign_in_at)}</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end', flexShrink: 0 }}>
+                        {busy ? (
+                            <div style={s.updating}>…</div>
+                        ) : (
+                            <>
+                              <select
+                                  style={{ ...s.roleSelect, color: u.role === 'cashier' ? '#666' : '#1A1A1A' }}
+                                  value={u.role ?? 'cashier'}
+                                  onChange={e => changerRole(u.id, e.target.value)}
+                                  disabled={isSelf} // on ne peut pas changer son propre rôle
+                              >
+                                {ROLES.map(r => <option key={r} value={r}>{ROLE_META[r].icon} {ROLE_META[r].label}</option>)}
+                              </select>
+                              {!isSelf && (
+                                  <button
+                                      style={u.active ? x.deactivateBtn : x.activateBtn}
+                                      onClick={() => changerActif(u.id, !u.active)}
+                                  >
+                                    {u.active ? 'Deactivate' : 'Activate'}
+                                  </button>
+                              )}
+                            </>
+                        )}
+                      </div>
                     </div>
-                    {/* Sélecteur de rôle */}
-                    <div style={{ position: 'relative', flexShrink: 0 }}>
-                      {updatingId === u.id ? (
-                          <div style={s.updating}>…</div>
-                      ) : (
-                          <select
-                              style={{ ...s.roleSelect, color: u.role === 'gerant' ? '#1A1A1A' : '#666' }}
-                              value={u.role ?? 'vendeur'}
-                              onChange={e => changerRole(u.id, e.target.value)}
-                              disabled={u.id === currentUser?.id} // on ne peut pas changer son propre rôle
-                          >
-                            <option value="gerant">👑 Manager</option>
-                            <option value="vendeur">🏪 Cashier</option>
-                          </select>
-                      )}
-                    </div>
-                  </div>
-              ))}
+                )
+              })}
             </div>
         )}
-
-        {/* Note d'installation SQL */}
-        <div style={s.sqlNote}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-          </svg>
-          ⚙️ Run both SQL files in Supabase SQL Editor: <code style={s.code}>supabase-users-view.sql</code> and <code style={s.code}>supabase-rpc-update-user-role.sql</code>
-        </div>
 
         {/* Modal instructions ajout utilisateur */}
         {showAdd && (
@@ -148,30 +166,29 @@ export default function UsersView() {
                   </div>
                   <div style={s.instructionStep}>
                     <div style={s.stepNum}>3</div>
-                    <div>Come back here, refresh the page, and use the <strong>role selector</strong> to assign the role</div>
+                    <div>Come back here and press <strong>Refresh list</strong>. The new account appears as <strong>pending</strong> (cashier): choose its role, then press <strong>Activate</strong></div>
                   </div>
                 </div>
 
                 <div style={s.fieldGroup}>
-                  <div style={s.fieldLabel}>Role to assign</div>
+                  <div style={s.fieldLabel}>Roles</div>
                   <div style={s.roleToggle}>
                     {ROLES.map(r => (
-                        <div
-                            key={r}
-                            style={{ ...s.roleOption, borderColor: newRole === r ? '#1A1A1A' : '#EBEBEB', background: newRole === r ? '#1A1A1A' : 'white' }}
-                            onClick={() => setNewRole(r)}
-                        >
-                          <div style={{ fontSize: '20px', marginBottom: '4px' }}>{r === 'gerant' ? '👑' : '🏪'}</div>
-                          <div style={{ ...s.roleOptionLabel, color: newRole === r ? 'white' : '#1A1A1A' }}>
-                            {r === 'gerant' ? 'Manager' : 'Cashier'}
-                          </div>
-                          <div style={{ ...s.roleOptionSub, color: newRole === r ? 'rgba(255,255,255,0.6)' : '#999' }}>
-                            {r === 'gerant' ? 'Full access' : 'Sales only'}
-                          </div>
+                        <div key={r} style={{ ...s.roleOption, cursor: 'default' }}>
+                          <div style={{ fontSize: '20px', marginBottom: '4px' }}>{ROLE_META[r].icon}</div>
+                          <div style={{ ...s.roleOptionLabel, color: '#1A1A1A' }}>{ROLE_META[r].label}</div>
+                          <div style={{ ...s.roleOptionSub, color: '#999' }}>{ROLE_META[r].sub}</div>
                         </div>
                     ))}
                   </div>
                 </div>
+
+                <button
+                    style={{ ...s.addBtn, width: '100%', padding: '13px 16px', fontSize: '14px' }}
+                    onClick={async () => { await fetchUsers(); setShowAdd(false) }}
+                >
+                  Refresh list
+                </button>
               </div>
             </div>
         )}
@@ -220,4 +237,10 @@ const s = {
   sqlBlock: { background: '#1A1A1A', borderRadius: '14px', padding: '14px 16px', marginTop: '16px' },
   sqlBlockLabel: { fontSize: '11px', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '8px' },
   sqlCode: { fontFamily: 'monospace', fontSize: '12px', color: '#7EE787', whiteSpace: 'pre', display: 'block', lineHeight: 1.6 },
+}
+
+const x = {
+  pendingBadge: { fontSize: '10px', background: '#FFF3E0', color: '#C45000', padding: '1px 6px', borderRadius: '100px', fontWeight: '500', flexShrink: 0 },
+  activateBtn: { background: '#1A1A1A', color: 'white', border: 'none', borderRadius: '100px', padding: '5px 12px', fontSize: '11.5px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  deactivateBtn: { background: 'none', color: '#999', border: 'none', padding: '2px 4px', fontSize: '11px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", textDecoration: 'underline' },
 }
