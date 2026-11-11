@@ -2,8 +2,15 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import EditProductModal from '../components/EditProductModal'
 import { downloadCsv } from '../lib/exportCsv'
+import { useAuth } from '../context/AuthContext'
+import { recordRestock, fetchStockOverview } from '../lib/stockApi'
+import { notifyCacheUpdated } from '../lib/offlineCache'
 
 export default function StocksView() {
+  const { estGerant, user } = useAuth()
+  const [overview, setOverview] = useState([])      // qui détient quoi : [{ product_id, owner_id, owner_name, qty, reserved }]
+  const [nouveauCout, setNouveauCout] = useState('') // prix d'achat unitaire du nouveau lot
+  const [restockError, setRestockError] = useState(null)
   const [produits, setProduits] = useState([])
   const [batches, setBatches] = useState([])
   const [loading, setLoading] = useState(true)
@@ -22,7 +29,13 @@ export default function StocksView() {
   useEffect(() => {
     fetchProduits()
     fetchBatches()
+    fetchOverview()
   }, [])
+
+  // Répartition du stock par détenteur (lecture seule, visible de tous les rôles)
+  const fetchOverview = async () => {
+    try { setOverview(await fetchStockOverview()) } catch (err) { console.error('stock_overview:', err); setOverview([]) }
+  }
 
   const fetchProduits = async () => {
     const { data } = await supabase
@@ -48,55 +61,38 @@ export default function StocksView() {
     e.stopPropagation() // Ne pas fermer l'expandable
     setEditProduit(produit)
     setNouvelleQte('')
+    setNouveauCout(produit.cost ? String(produit.cost) : '')
+    setRestockError(null)
   }
 
+  // Approvisionnement : un lot à MON nom, avec son prix d'achat, enregistré par
+  // la fonction SQL record_restock (lot + mouvement + stock détenu + total, en
+  // une seule opération). Exige d'être en ligne.
   const enregistrerBatch = async () => {
     const qty = parseInt(nouvelleQte)
-    if (!qty || qty <= 0) return
+    const cout = parseFloat(nouveauCout)
+    if (!qty || qty <= 0 || isNaN(cout) || cout < 0) return
     setSaving(true)
+    setRestockError(null)
 
     try {
-      const { data: newBatch, error: batchError } = await supabase
-          .from('stock_batches')
-          .insert({
-            product_id: editProduit.id,
-            received_qty: qty,
-            received_at: new Date().toISOString(),
-          })
-          .select()
-          .single()
-
-      if (batchError) throw batchError
-
-      const nouveauStock = editProduit.stock + qty
-      const { error: stockError } = await supabase
-          .from('products')
-          .update({ stock: nouveauStock })
-          .eq('id', editProduit.id)
-      if (stockError) throw stockError
-
-      const { error: movError } = await supabase
-          .from('stock_movements')
-          .insert({
-            product_id: editProduit.id,
-            batch_id: newBatch.id,
-            delta: qty,
-            reason: 'reception_carton',
-          })
-      if (movError) console.error('Erreur mouvement:', movError)
-
-      await fetchProduits()
-      await fetchBatches()
+      await recordRestock(editProduit.id, qty, cout)
+      notifyCacheUpdated()
+      await Promise.all([fetchProduits(), fetchBatches(), fetchOverview()])
       setEditProduit(null)
     } catch (err) {
       console.error('Erreur:', err)
-      alert('Erreur lors de l\'enregistrement')
+      setRestockError(err?.isNetwork || !navigator.onLine
+        ? 'You must be online to register a batch.'
+        : (err?.message || 'Error while saving'))
     } finally {
       setSaving(false)
     }
   }
 
   const [search, setSearch] = useState('')
+
+  const overviewByProduct = overview.reduce((acc, h) => { (acc[h.product_id] = acc[h.product_id] || []).push(h); return acc }, {})
 
   const filtres = {
     all: produits,
@@ -139,7 +135,7 @@ export default function StocksView() {
   }
 
   const handleExportLedger = () => {
-    const headers = ['Product', 'Quantity received', 'Date added', 'Date exhausted', 'Status', 'Duration (days)']
+    const headers = ['Product', 'Quantity received', 'Remaining', 'Unit cost (GH₵)', 'Origin', 'Date added', 'Date exhausted', 'Status', 'Duration (days)']
     const rows = ledgerFiltre.map(b => {
       const received = new Date(b.received_at)
       const exhausted = b.exhausted_at ? new Date(b.exhausted_at) : null
@@ -147,6 +143,9 @@ export default function StocksView() {
       return [
         b.products?.name ?? '',
         b.received_qty,
+        b.remaining_qty ?? '',
+        b.unit_cost ?? '',
+        b.origin ?? '',
         received.toLocaleDateString('en-GB'),
         exhausted ? exhausted.toLocaleDateString('en-GB') : '',
         exhausted ? 'Exhausted' : 'Active',
@@ -237,7 +236,7 @@ export default function StocksView() {
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={s.ledgerProduit}>{batch.products?.name ?? 'Unknown product'}</div>
                               <div style={s.ledgerMeta}>
-                                {batch.received_qty} units · added {received.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                {batch.remaining_qty ?? 0}/{batch.received_qty} units left{batch.unit_cost != null ? ` · ${batch.unit_cost} GH₵ each` : ''} · added {received.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}
                                 {batch.exhausted_at ? ` · exhausted ${exhausted.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
                                 {' · '}{days}d
                               </div>
@@ -369,14 +368,16 @@ export default function StocksView() {
                           </div>
                         </div>
 
-                        {/* Bouton édition produit */}
-                        <button
-                            onClick={(e) => { e.stopPropagation(); setProduitAEditer(p) }}
-                            style={s.addBatchBtn}
-                            title="Edit product"
-                        >
-                          ✏️
-                        </button>
+                        {/* Bouton édition produit (manager/admin) */}
+                        {estGerant && (
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setProduitAEditer(p) }}
+                                style={s.addBatchBtn}
+                                title="Edit product"
+                            >
+                              ✏️
+                            </button>
+                        )}
 
                         {/* Bouton expand + add batch */}
                         <button
@@ -408,6 +409,20 @@ export default function StocksView() {
                       {/* Section batches - affichée si expanded */}
                       {isExpanded && (
                           <div style={s.expandedSection}>
+                            {/* Qui détient ce produit */}
+                            <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
+                              <div style={{ fontSize: '10.5px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Held by</div>
+                              {(overviewByProduct[p.id] ?? []).length === 0 ? (
+                                  <div style={{ fontSize: '12px', color: '#BBB' }}>Nobody holds this product</div>
+                              ) : (
+                                  (overviewByProduct[p.id] ?? []).map(h => (
+                                      <div key={h.owner_id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12.5px', color: '#444', padding: '2px 0' }}>
+                                        <span>{h.owner_id === user?.id ? `${h.owner_name} (you)` : h.owner_name}</span>
+                                        <strong>{h.qty}{h.reserved > 0 ? ` (${h.reserved} in transit)` : ''}</strong>
+                                      </div>
+                                  ))
+                              )}
+                            </div>
                             {productBatches.length === 0 ? (
                                 <div style={{ padding: '16px', textAlign: 'center', color: '#BBB', fontSize: '12px' }}>
                                   No batches yet
@@ -439,7 +454,7 @@ export default function StocksView() {
                                           <div style={{ flex: 1, minWidth: 0 }}>
                                             <div style={s.batchInfo}>
                                               <div>
-                                                <div style={s.batchQty}>{batch.received_qty} units</div>
+                                                <div style={s.batchQty}>{batch.remaining_qty ?? 0}/{batch.received_qty} units{batch.unit_cost != null ? ` · ${batch.unit_cost} GH₵` : ''}</div>
                                                 <div style={s.batchDate}>{received.toLocaleDateString('en', { month: 'short', day: 'numeric' })}</div>
                                               </div>
                                               {batch.exhausted_at && (
@@ -523,6 +538,25 @@ export default function StocksView() {
                   )}
                 </div>
 
+                <div style={s.fieldGroup}>
+                  <div style={s.fieldLabel}>Buying price per unit (GH₵)</div>
+                  <input
+                      style={s.input}
+                      type="number"
+                      step="0.01"
+                      inputMode="decimal"
+                      placeholder="Ex: 3.10"
+                      value={nouveauCout}
+                      onChange={e => setNouveauCout(e.target.value)}
+                      onClick={e => e.stopPropagation()}
+                  />
+                  {nouvelleQte && parseInt(nouvelleQte) > 0 && nouveauCout !== '' && !isNaN(parseFloat(nouveauCout)) && (
+                      <div style={s.preview}>
+                        Batch cost: <strong>{(parseInt(nouvelleQte) * parseFloat(nouveauCout)).toLocaleString(undefined, { maximumFractionDigits: 2 })} GH₵</strong> · goes to your stock
+                      </div>
+                  )}
+                </div>
+
                 <div style={s.shortcutRow}>
                   {[50, 100, 150, 200].map(n => (
                       <button
@@ -535,10 +569,16 @@ export default function StocksView() {
                   ))}
                 </div>
 
+                {restockError && (
+                    <div style={{ background: '#FFF0F0', color: '#C00', borderRadius: '10px', padding: '10px 14px', fontSize: '13px', marginBottom: '12px' }}>
+                      {restockError}
+                    </div>
+                )}
+
                 <button
-                    style={{ ...s.submitBtn, opacity: (!nouvelleQte || saving) ? 0.5 : 1 }}
+                    style={{ ...s.submitBtn, opacity: (!nouvelleQte || nouveauCout === '' || saving) ? 0.5 : 1 }}
                     onClick={e => { e.stopPropagation(); enregistrerBatch() }}
-                    disabled={!nouvelleQte || saving}
+                    disabled={!nouvelleQte || nouveauCout === '' || saving}
                 >
                   {saving ? 'Saving…' : 'Register batch'}
                 </button>

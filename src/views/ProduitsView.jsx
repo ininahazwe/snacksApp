@@ -4,9 +4,11 @@ import NewProductModal from '../components/NewProductModal'
 import { formatPrice } from '../lib/format'
 import { cacheProducts, getCachedProducts, onCacheUpdated } from '../lib/offlineCache'
 import { useAuth } from '../context/AuthContext'
+import { useMyStock } from '../hooks/useMyStock'
 
 export default function ProduitsView({ onProductTap, onAddToCart, cartProductIds = [] }) {
   const { estGerant } = useAuth()
+  const { myStock } = useMyStock()
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -111,12 +113,12 @@ export default function ProduitsView({ onProductTap, onAddToCart, cartProductIds
               {filtered.map(p => (
                   <div
                       key={p.id}
-                      onClick={() => onProductTap && onProductTap(p)}
+                      onClick={() => onProductTap && onProductTap({ ...p, myStock: myStock[p.id] ?? 0 })}
                       style={{background:'white',borderRadius:'18px',border:'1px solid rgba(0,0,0,0.05)',boxShadow:'0 2px 12px rgba(0,0,0,0.04)',padding:'16px',cursor:'pointer',transition:'all 0.2s ease',position:'relative'}}
                   >
                     {onAddToCart && (
                         <button
-                            onClick={e => { e.stopPropagation(); onAddToCart(p) }}
+                            onClick={e => { e.stopPropagation(); onAddToCart({ ...p, myStock: myStock[p.id] ?? 0 }) }}
                             title="Add to cart"
                             style={{
                               position:'absolute', top:'10px', right:'10px', zIndex:1,
@@ -135,8 +137,11 @@ export default function ProduitsView({ onProductTap, onAddToCart, cartProductIds
                     </div>
                     <div style={{fontSize:'13px',fontWeight:'500',color:'#1A1A1A',marginBottom:'6px',lineHeight:1.3}}>{p.name}</div>
                     <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'15px',color:'#1A1A1A'}}>{formatPrice(p.price)} GH₵</div>
-                    <div style={{fontSize:'11px',marginTop:'3px',color:p.stock<10?'#C45000':'#999'}}>
-                      {p.stock < 10 ? '⚠ ' : ''}{p.stock} in stock
+                    <div style={{fontSize:'11px',marginTop:'3px',color:(myStock[p.id] ?? 0) > 0 ? '#2E7D42' : '#C45000',fontWeight:'500'}}>
+                      {(myStock[p.id] ?? 0) > 0 ? `${myStock[p.id]} in your stock` : 'Not in your stock'}
+                    </div>
+                    <div style={{fontSize:'10.5px',marginTop:'2px',color:p.stock<10?'#C45000':'#BBB'}}>
+                      {p.stock < 10 ? '⚠ ' : ''}{p.stock} total
                     </div>
                   </div>
               ))}

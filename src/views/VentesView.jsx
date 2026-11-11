@@ -4,6 +4,7 @@ import { formatPrice, round2 } from '../lib/format'
 import { printReceipt } from '../lib/receipt'
 import { downloadCsv } from '../lib/exportCsv'
 import { useAuth } from '../context/AuthContext'
+import { cancelSales } from '../lib/stockApi'
 
 export default function VentesView() {
   const { estGerant } = useAuth()
@@ -34,7 +35,7 @@ export default function VentesView() {
     // part sur demande plutôt que d'être définitivement supprimées.
     const { data } = await supabase
         .from('sales')
-        .select('id, product_id, client_id, user_id, qty, amount, type, created_at, debt_added, debt_repaid, credit_used, credit_created, cancelled_at, batch_id, batch_was_exhausted, original_amount, discount_reason, group_id, products(name, emoji, price, cost), clients(name)')
+        .select('id, product_id, client_id, user_id, qty, amount, type, created_at, debt_added, debt_repaid, credit_used, credit_created, cancelled_at, batch_id, batch_was_exhausted, original_amount, discount_reason, group_id, needs_review, unfulfilled_qty, cost_amount, products(name, emoji, price, cost), clients(name)')
         .order('created_at', { ascending: false })
     setSales(data ?? [])
     setLoading(false)
@@ -69,7 +70,7 @@ export default function VentesView() {
     // seconde fois comme "Credit sales").
     const { data: periodSales } = await supabase
         .from('sales')
-        .select('id, product_id, qty, amount, type, products(name, emoji, price, cost)')
+        .select('id, product_id, qty, amount, type, cost_amount, products(name, emoji, price, cost)')
         .gte('created_at', start)
         .lte('created_at', end)
         .is('cancelled_at', null)
@@ -90,8 +91,11 @@ export default function VentesView() {
 
     periodSales.forEach(sale => {
       totalRevenue += sale.amount
-      const productCost = sale.products?.cost ?? 0
-      const saleItemCost = productCost * sale.qty
+      // Coût réel des lots consommés (enregistré à la vente) ; pour les ventes
+      // d'avant la phase 2, repli sur le prix d'achat de référence du produit.
+      const saleItemCost = sale.cost_amount != null
+          ? Number(sale.cost_amount)
+          : (sale.products?.cost ?? 0) * sale.qty
       totalCost += saleItemCost
 
       if (sale.type === 'cash') {
@@ -123,98 +127,23 @@ export default function VentesView() {
     return new Date(iso).toLocaleDateString('fr', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
   }
 
-  // Confirmer l'annulation d'une vente (ou d'un paiement / usage d'avoir / conversion en avoir)
-  //
-  // Logique générique : on ne se fie plus à "amount" (ambigu selon le type et selon qu'un
-  // avoir a été appliqué), mais aux colonnes explicites debt_added / debt_repaid /
-  // credit_used / credit_created enregistrées au moment de la transaction. Défaire une
-  // transaction = appliquer l'inverse exact de ces 4 valeurs, quel que soit son type.
-  //
-  // La vente n'est plus supprimée (perte d'information) mais marquée cancelled_at :
-  // elle reste visible dans l'historique du client, barrée et taguée "Cancelled".
-  // Annule UNE ligne de vente (restaure stock + lot, défait dette/avoir du
-  // client, marque la ligne cancelled_at). Fonction pure sur `sale` — ne
-  // touche à aucun état du composant — pour pouvoir être appelée aussi bien
-  // pour annuler une seule ligne que pour annuler, une par une, toutes les
-  // lignes d'un même panier (group_id) sans dupliquer cette logique.
-  const cancelSaleRow = async (sale) => {
-    // 1. Restaurer le stock du produit (uniquement si la ligne correspond à un produit)
-    if (sale.product_id) {
-      const { data: product } = await supabase
-          .from('products')
-          .select('stock')
-          .eq('id', sale.product_id)
-          .single()
-
-      const newStock = (product?.stock ?? 0) + sale.qty
-
-      await supabase
-          .from('products')
-          .update({ stock: newStock })
-          .eq('id', sale.product_id)
-
-      // 2. Journaliser le mouvement de stock inverse, RATTACHÉ AU LOT D'ORIGINE
-      // (sale.batch_id) et à la vente qu'on annule (sale_id) — sans ce
-      // rattachement, le décompte du lot resterait faux et un lot déjà
-      // épuisé ne pourrait jamais être "rouvert" ci-dessous.
-      await supabase
-          .from('stock_movements')
-          .insert({
-            product_id: sale.product_id,
-            batch_id: sale.batch_id ?? null,
-            sale_id: sale.id,
-            delta: sale.qty,
-            reason: 'Sale cancelled',
-          })
-
-      // 3. Si CETTE vente précise avait épuisé un lot, on le rouvre : sinon le lot
-      // resterait marqué "exhausted" pour toujours malgré l'unité rendue, et le
-      // FIFO irait piocher dans le lot suivant au lieu du bon.
-      if (sale.batch_was_exhausted && sale.batch_id) {
-        await supabase
-            .from('stock_batches')
-            .update({ exhausted_at: null, duration_days: null })
-            .eq('id', sale.batch_id)
-      }
-    }
-
-    // 4. Défaire l'effet exact de la transaction sur la dette et l'avoir du client
-    const hasBalanceEffect = (sale.debt_added || sale.debt_repaid || sale.credit_used || sale.credit_created)
-    if (sale.client_id && hasBalanceEffect) {
-      const { data: client } = await supabase
-          .from('clients')
-          .select('debt, credit')
-          .eq('id', sale.client_id)
-          .single()
-
-      const newDebt = round2(Math.max(0, (client?.debt ?? 0) - (sale.debt_added ?? 0) + (sale.debt_repaid ?? 0)))
-      const newCredit = round2(Math.max(0, (client?.credit ?? 0) - (sale.credit_created ?? 0) + (sale.credit_used ?? 0)))
-
-      await supabase
-          .from('clients')
-          .update({ debt: newDebt, credit: newCredit })
-          .eq('id', sale.client_id)
-    }
-
-    // 5. Marquer la transaction comme annulée (soft-delete) au lieu de la supprimer :
-    // on garde une trace d'audit complète plutôt que de faire disparaître la
-    // transaction. Le reste de l'app filtre cancelled_at pour ne pas compter
-    // ces ventes dans les totaux/le dashboard.
-    await supabase
-        .from('sales')
-        .update({ cancelled_at: new Date().toISOString() })
-        .eq('id', sale.id)
-  }
-
+  // Annulation d'une vente (ou d'un paiement / usage d'avoir / conversion en avoir),
+  // d'une seule ligne ou de tout un panier : exécutée par la fonction SQL
+  // cancel_sales, en UNE opération atomique réservée aux managers/admin :
+  //   • le stock revient chez son détenteur d'origine (le vendeur), lot d'origine
+  //     rouvert si besoin ;
+  //   • la dette / l'avoir du client sont inversés à partir des colonnes
+  //     debt_added / debt_repaid / credit_used / credit_created ;
+  //   • la ligne est marquée cancelled_at (jamais supprimée : traçabilité).
   const handleConfirmCancel = async () => {
     if (!saleToCancel) return
     setCancelling(true)
     try {
-      await cancelSaleRow(saleToCancel)
+      await cancelSales([saleToCancel.id])
       setSaleToCancel(null)
       fetchSales()
     } catch (err) {
-      alert("Erreur lors de l'annulation de la vente")
+      alert(err?.message || "Error while cancelling the sale")
       console.error(err)
     } finally {
       setCancelling(false)
@@ -222,20 +151,17 @@ export default function VentesView() {
   }
 
   // Annule tout un panier (achat multi-produits) d'un coup : toutes les
-  // lignes actives partageant le même group_id, une par une, avec la même
-  // logique que l'annulation d'une seule ligne ci-dessus.
+  // lignes actives partageant le même group_id, dans la même opération.
   const handleConfirmCancelGroup = async () => {
     if (!groupToCancel) return
     setCancellingGroup(true)
     try {
-      const rows = sales.filter(s => s.group_id === groupToCancel && !s.cancelled_at)
-      for (const row of rows) {
-        await cancelSaleRow(row)
-      }
+      const ids = sales.filter(s => s.group_id === groupToCancel && !s.cancelled_at).map(s => s.id)
+      await cancelSales(ids)
       setGroupToCancel(null)
       fetchSales()
     } catch (err) {
-      alert("Erreur lors de l'annulation du panier")
+      alert(err?.message || "Error while cancelling the cart")
       console.error(err)
     } finally {
       setCancellingGroup(false)
@@ -465,6 +391,11 @@ export default function VentesView() {
                         {s.group_id && (
                             <div style={{ fontSize: '10px', color: '#999', marginTop: '1px' }}>
                               🧺 Part of a multi-item sale
+                            </div>
+                        )}
+                        {s.needs_review && (
+                            <div style={{ fontSize: '10px', color: '#C45000', marginTop: '1px', fontWeight: '500' }}>
+                              ⚠ To verify — {s.unfulfilled_qty} unit{s.unfulfilled_qty !== 1 ? 's' : ''} sold beyond the seller's stock (offline sync)
                             </div>
                         )}
                       </div>

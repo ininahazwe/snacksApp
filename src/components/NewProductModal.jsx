@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { recordRestock } from '../lib/stockApi'
 
 const EMOJIS = ['🍬', '🍫', '🍭', '🍡', '🍩', '🧁', '🍪', '🍓', '🍋', '🥭', '🍑', '🍇']
 const COLORS = ['#F5C842', '#E84B6E', '#5BAD72', '#C4A8E0', '#8B5E3C', '#F4845F', '#4ECDC4', '#2D2D2D']
@@ -62,12 +63,14 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
     if (!name || !price) return
     setLoading(true)
     try {
+      // Le stock n'est jamais écrit directement : le produit est créé à 0, puis
+      // le stock initial est enregistré comme un approvisionnement (lot à votre
+      // nom, avec son prix d'achat) par la fonction SQL record_restock.
       const { data, error } = await supabase.from('products').insert({
         name: name.trim(),
         price: parseFloat(price),
         cost: parseFloat(cost) || 0,
         category: category.trim() || 'Autre',
-        stock: parseInt(stock) || 0,
         barcode: barcode || null,
         emoji,
         color,
@@ -75,30 +78,15 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
 
       if (error) throw error
 
-      // Si stock initial > 0, créer un batch automatiquement + journaliser le
-      // mouvement correspondant (sinon la somme des mouvements ne colle plus
-      // au stock affiché dès la création du produit — même logique que
-      // "Add batch" dans Inventory, qui journalise déjà ce mouvement).
       const initialQty = parseInt(stock) || 0
       if (initialQty > 0) {
-        const { data: newBatch, error: batchError } = await supabase
-            .from('stock_batches')
-            .insert({
-              product_id: data.id,
-              received_qty: initialQty,
-              received_at: new Date().toISOString(),
-            })
-            .select()
-            .single()
-        if (batchError) console.error('Erreur création batch:', batchError)
-
-        const { error: movError } = await supabase.from('stock_movements').insert({
-          product_id: data.id,
-          batch_id: newBatch?.id ?? null,
-          delta: initialQty,
-          reason: 'reception_carton',
-        })
-        if (movError) console.error('Erreur mouvement initial:', movError)
+        try {
+          const res = await recordRestock(data.id, initialQty, parseFloat(cost) || 0)
+          data.stock = res?.stock_total ?? initialQty
+        } catch (restockErr) {
+          console.error('Erreur stock initial:', restockErr)
+          alert('The product was created, but its initial stock could not be recorded: ' + (restockErr?.message || 'unknown error') + '\nAdd it from the Inventory screen.')
+        }
       }
 
       onCreated(data)
@@ -213,7 +201,7 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
 
           {/* Stock */}
           <div style={styles.fieldGroup}>
-            <div style={styles.fieldLabel}>Initial stock</div>
+            <div style={styles.fieldLabel}>Initial stock (added to your stock)</div>
             <input
                 style={styles.input}
                 type="number"
@@ -279,7 +267,7 @@ export default function NewProductModal({ barcode, onClose, onCreated }) {
                 opacity: (!name || !price || loading) ? 0.5 : 1,
               }}
               onClick={handleSubmit}
-              disabled={!name || !price || loading}
+              disabled={!name || !price || loading || ((parseInt(stock) || 0) > 0 && cost === '')}
           >
             {loading ? 'Saving…' : 'Create the product'}
           </button>

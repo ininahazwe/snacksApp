@@ -42,7 +42,7 @@ const NAV_ITEMS = [
     icon: (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>),
   },
   {
-    path: '/stocks', label: 'Inventory', gerantOnly: true,
+    path: '/stocks', label: 'Inventory', gerantOnly: false,
     icon: (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>),
   },
   {
@@ -96,11 +96,17 @@ function AppLayout() {
   // Ajoute un produit au panier (achat multi-produits) sans ouvrir la vente
   // rapide à 1 produit — si le produit y est déjà, on incrémente sa quantité
   // (dans la limite du stock disponible) plutôt que de dupliquer la ligne.
+  // La limite est le stock DÉTENU par l'utilisateur (product.myStock, fourni par
+  // ProduitsView), pas le stock total de la boutique.
   const handleAddToCart = (product) => {
+    if (product.myStock !== undefined && product.myStock <= 0) {
+      showToast(`"${product.name}" is not in your stock`)
+      return
+    }
     setCart(cur => {
       const existing = cur.find(c => c.product.id === product.id)
       if (existing) {
-        const maxQty = product.stock ?? existing.qty
+        const maxQty = product.myStock ?? product.stock ?? existing.qty
         if (existing.qty >= maxQty) return cur
         return cur.map(c => c.product.id === product.id ? { ...c, qty: c.qty + 1 } : c)
       }
@@ -170,11 +176,7 @@ function AppLayout() {
                 <ClientsView />
               </RoleGuard>
             } />
-            <Route path="/stocks" element={
-              <RoleGuard requireGerant>
-                <StocksView />
-              </RoleGuard>
-            } />
+            <Route path="/stocks" element={<StocksView />} />
             <Route path="/team" element={
               <RoleGuard requireAdmin>
                 <UsersView />

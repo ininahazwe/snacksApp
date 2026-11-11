@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { adjustStock } from '../lib/stockApi'
 
 const EMOJIS = ['🍬', '🍫', '🍭', '🍡', '🍩', '🧁', '🍪', '🍓', '🍋', '🥭', '🍑', '🍇']
 const COLORS = ['#F5C842', '#E84B6E', '#5BAD72', '#C4A8E0', '#8B5E3C', '#F4845F', '#4ECDC4', '#2D2D2D']
@@ -105,25 +106,21 @@ export default function EditProductModal({ product, onClose, onUpdated, onDelete
         const nouveau = parseInt(stockValue, 10)
         if (isNaN(nouveau) || nouveau < 0 || !stockModifie) return
         setSavingStock(true)
-        const delta = nouveau - product.stock
-        const { error } = await supabase
-            .from('products')
-            .update({ stock: nouveau })
-            .eq('id', product.id)
-        if (!error) {
-            await supabase.from('stock_movements').insert({
-                product_id: product.id,
-                delta,
-                reason: 'Manual adjustment',
-            })
+        // Ajustement manuel du stock TOTAL : appliqué par la fonction SQL
+        // adjust_stock au stock que VOUS détenez (lot « adjustment » si on
+        // ajoute, sortie FIFO si on retire). Impossible de retirer plus que
+        // ce que vous détenez : le reste appartient à d'autres détenteurs.
+        try {
+            await adjustStock(product.id, nouveau)
             setToastStock({ msg: 'Stock updated ✓', type: 'success' })
             setTimeout(() => setToastStock(null), 2500)
             // Mettre à jour le produit local sans fermer le modal
             product = { ...product, stock: nouveau }
             onUpdated({ ...product, stock: nouveau })
-        } else {
-            setToastStock({ msg: 'Error updating stock', type: 'danger' })
-            setTimeout(() => setToastStock(null), 2500)
+        } catch (err) {
+            console.error('Erreur ajustement stock:', err)
+            setToastStock({ msg: err?.message || 'Error updating stock', type: 'danger' })
+            setTimeout(() => setToastStock(null), 4000)
         }
         setSavingStock(false)
     }

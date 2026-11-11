@@ -1,30 +1,30 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { formatPrice, round2 } from '../lib/format'
 import { printReceipt } from '../lib/receipt'
 import { enqueueSale } from '../lib/offlineQueue'
+import { recordSale, newRequestId, adjustCachedMyStock } from '../lib/stockApi'
+import { useMyStock } from '../hooks/useMyStock'
 import { cacheClients, getCachedClients, cacheProducts, getCachedProducts, notifyCacheUpdated } from '../lib/offlineCache'
 
 // Vente "panier" : plusieurs produits, un seul client, un seul paiement, un
 // seul reçu — pour enregistrer en une fois un achat multi-produits.
 //
-// Réutilise exactement la même logique par ligne que SaleModal (vente à 1
-// produit) : lot FIFO, décrément de stock, mouvement de stock, épuisement
-// de lot. La différence est que toutes les lignes partagent un `group_id`
-// commun généré ici, et que la dette/l'avoir générés par le paiement du
-// panier sont répartis au prorata du montant de chaque ligne (pour que les
-// agrégats déjà en place — Dashboard, fiche client, VentesView — restent
-// corrects sans devoir les réécrire). Le solde du client, lui, n'est mis à
-// jour qu'une seule fois avec les vrais totaux (pas la somme des parts
-// arrondies) pour éviter toute dérive de centimes.
-//
-// Chaque ligne reste malgré tout complète et indépendante (son propre lot,
-// sa propre part de dette/avoir) : VentesView peut donc annuler une seule
-// ligne du panier ou le panier entier avec la même logique d'annulation
-// déjà existante, sans aucun changement à cette logique.
+// Phase 2 : le panier est enregistré par la fonction SQL record_sale, en UNE
+// opération atomique (toutes les lignes, ou aucune) sur le stock détenu par le
+// vendeur (FIFO sur ses lots). Toutes les lignes partagent un `group_id`
+// commun ; la dette/l'avoir générés par le paiement sont répartis par ligne au
+// prorata de leur montant côté base (pour que Dashboard, fiche client et
+// VentesView restent corrects), et le solde du client est mis à jour une seule
+// fois. Chaque ligne reste annulable seule ou avec tout le panier (cancel_sales).
 export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
   const { user } = useAuth()
+  const { myStock } = useMyStock()
+  // Identifiants stables pour CE panier (idempotence : un nouvel essai après une
+  // réponse perdue ne duplique pas la vente ; group_id relie toutes les lignes).
+  const requestIdRef = useRef(newRequestId())
+  const groupIdRef = useRef(newRequestId())
   const [discounts, setDiscounts] = useState({}) // { [productId]: { isDiscounted, discountedPrice, discountReason } }
   const [selectedClient, setSelectedClient] = useState(null)
   const [paymentType, setPaymentType] = useState('cash')
@@ -65,7 +65,7 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
     const effectiveUnitPrice = hasValidDiscount ? parsedDiscountPrice : c.product.price
     const total = round2(effectiveUnitPrice * c.qty)
     const originalTotal = round2(c.product.price * c.qty)
-    const insufficientStock = c.qty > (c.product.stock ?? 0)
+    const insufficientStock = c.qty > (myStock[c.product.id] ?? 0)
     return {
       product: c.product, qty: c.qty,
       isDiscounted: d.isDiscounted, discountedPrice: d.discountedPrice, discountReason: d.discountReason,
@@ -86,7 +86,6 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
   const creditNeedsClient = saveAsCredit && changeDue > 0 && !selectedClient
   const cashReceivedIsInsufficient = paymentType === 'cash' && cashReceived !== '' && received < amountDue
 
-  const debtAddedTotal = paymentType === 'dette' ? amountDue : 0
   const newCreditFromChange = (paymentType === 'cash' && saveAsCredit && changeDue > 0) ? changeDue : 0
 
   const filteredClients = clients.filter(c => c.name.toLowerCase().includes(clientSearch.toLowerCase()))
@@ -101,19 +100,6 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
     [productId]: { isDiscounted: false, discountedPrice: '', discountReason: '', ...cur[productId], ...patch },
   }))
 
-  // Répartit un montant (dette ajoutée / avoir consommé / avoir créé) sur les
-  // lignes actives au prorata de leur part du panier. Le reste (arrondi) est
-  // donné à la dernière ligne, pour que la somme des parts tombe pile sur le
-  // montant réel appliqué au client — sinon un arrondi ligne par ligne pourrait
-  // dériver de quelques centimes par rapport au total.
-  const splitProrata = (total, activeLines) => {
-    if (total === 0 || cartTotal === 0) return activeLines.map(() => 0)
-    const shares = activeLines.map(l => round2(total * (l.total / cartTotal)))
-    const sumSoFar = shares.reduce((s, v) => s + v, 0)
-    shares[shares.length - 1] = round2(shares[shares.length - 1] + (total - sumSoFar))
-    return shares
-  }
-
   const buildReceiptData = (offline) => ({
     lines: computedLines.map(l => ({
       productName: l.product.name, emoji: l.product.emoji, qty: l.qty, unitPrice: l.effectiveUnitPrice,
@@ -127,7 +113,7 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
 
   const handleSubmit = async () => {
     if (anyInsufficientStock) {
-      alert('Not enough stock for one or more items — adjust the quantities.')
+      alert('Not enough stock in your holdings for one or more items — adjust the quantities.')
       return
     }
     if (computedLines.length === 0) {
@@ -136,38 +122,38 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
     }
 
     setLoading(true)
-    const groupId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : `grp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
-    const debtShares = splitProrata(debtAddedTotal, computedLines)
-    const creditUsedShares = splitProrata(appliedCredit, computedLines)
-    const creditCreatedShares = splitProrata(newCreditFromChange, computedLines)
+    // Payload envoyé à la fonction SQL record_sale : le panier est enregistré
+    // en UNE opération atomique (toutes les lignes, ou aucune). Prix, totaux,
+    // répartition de la dette/de l'avoir par ligne et coût sont recalculés côté
+    // base ; on n'envoie que les intentions.
+    const payload = {
+      request_id: requestIdRef.current,
+      group_id: groupIdRef.current,
+      client_id: selectedClient?.id ?? null,
+      payment_type: paymentType,
+      credit_applied: appliedCredit,
+      cash_received: paymentType === 'cash' && cashReceived !== '' ? received : null,
+      save_change_as_credit: saveAsCredit,
+      lines: computedLines.map(l => ({
+        product_id: l.product.id,
+        qty: l.qty,
+        unit_price: l.hasValidDiscount ? parseFloat(l.discountedPrice) : null,
+        discount_reason: l.hasValidDiscount ? (l.discountReason.trim() || null) : null,
+      })),
+    }
+    const stockDeltas = {}
+    computedLines.forEach(l => { stockDeltas[l.product.id] = -l.qty })
 
-    // ── Hors-ligne : chaque ligne du panier est mise en file séparément (même
-    // group_id), rejouée un par un au retour du réseau par la même logique
-    // que pour une vente à 1 produit — voir offlineQueue.syncOneSale, non
-    // modifiée pour le panier, juste appelée plusieurs fois.
+    // ── Hors-ligne : le panier entier est mis en file (une seule entrée) et
+    // rejoué par la même fonction au retour du réseau — voir offlineQueue.js.
     if (!navigator.onLine) {
       try {
-        computedLines.forEach((l, i) => {
-          const lineAmount = round2(l.total - creditUsedShares[i])
-          enqueueSale({
-            group_id: groupId,
-            product_id: l.product.id,
-            product_name: l.product.name,
-            client_id: selectedClient?.id ?? null,
-            client_name: selectedClient?.name ?? null,
-            user_id: user?.id ?? null,
-            qty: l.qty,
-            amount: lineAmount,
-            amountDue: lineAmount,
-            type: paymentType,
-            appliedCredit: creditUsedShares[i],
-            newCreditFromChange: creditCreatedShares[i],
-            original_amount: l.hasValidDiscount ? l.originalTotal : null,
-            discount_reason: l.hasValidDiscount ? (l.discountReason.trim() || null) : null,
-          })
+        enqueueSale({
+          v: 2,
+          user_id: user?.id ?? null,
+          payload: { ...payload, offline: true },
+          summary: { amount: cartTotal, lines: computedLines.map(l => ({ name: l.product.name, qty: l.qty })) },
         })
 
         const cachedProducts = getCachedProducts().map(p => {
@@ -175,6 +161,7 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
           return l ? { ...p, stock: p.stock - l.qty } : p
         })
         cacheProducts(cachedProducts)
+        if (user?.id) adjustCachedMyStock(user.id, stockDeltas)
 
         if (selectedClient) {
           const creditDelta = round2(newCreditFromChange - appliedCredit)
@@ -202,108 +189,24 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
     }
 
     try {
-      for (let i = 0; i < computedLines.length; i++) {
-        const l = computedLines[i]
+      const res = await recordSale(payload)
+      const dup = !!res?.duplicate
+      const serverCredit = dup ? appliedCredit : (res?.credit_applied ?? appliedCredit)
+      const serverNewCredit = dup ? newCreditFromChange : (res?.credit_created ?? newCreditFromChange)
 
-        const { data: batches, error: batchError } = await supabase
-            .from('stock_batches')
-            .select(`
-              *,
-              stock_movements (delta)
-            `)
-            .eq('product_id', l.product.id)
-            .is('exhausted_at', null)
-            .order('received_at', { ascending: true })
-            .limit(1)
-        if (batchError) throw batchError
-        const activeBatch = batches?.[0] ?? null
+      if (!dup && user?.id) adjustCachedMyStock(user.id, stockDeltas)
+      notifyCacheUpdated()
 
-        let willExhaustBatch = false
-        if (activeBatch) {
-          const pastDeltasSum = activeBatch.stock_movements?.reduce((sum, mov) => sum + mov.delta, 0) || 0
-          const batchRemainingStock = activeBatch.received_qty + pastDeltasSum - l.qty
-          willExhaustBatch = batchRemainingStock <= 0
-        }
-
-        const lineAmount = round2(l.total - creditUsedShares[i])
-
-        const { data: insertedSale, error: saleError } = await supabase
-            .from('sales')
-            .insert({
-              group_id: groupId,
-              product_id: l.product.id,
-              client_id: selectedClient?.id ?? null,
-              user_id: user?.id ?? null,
-              qty: l.qty,
-              amount: lineAmount,
-              type: paymentType,
-              debt_added: debtShares[i],
-              credit_used: creditUsedShares[i],
-              credit_created: creditCreatedShares[i],
-              batch_id: activeBatch?.id ?? null,
-              batch_was_exhausted: willExhaustBatch,
-              original_amount: l.hasValidDiscount ? l.originalTotal : null,
-              discount_reason: l.hasValidDiscount ? (l.discountReason.trim() || null) : null,
-            })
-            .select()
-            .single()
-        if (saleError) throw saleError
-
-        const newStock = l.product.stock - l.qty
-        const { error: stockError } = await supabase
-            .from('products')
-            .update({ stock: newStock })
-            .eq('id', l.product.id)
-        if (stockError) throw stockError
-
-        const { error: movError } = await supabase.from('stock_movements').insert({
-          product_id: l.product.id,
-          batch_id: activeBatch?.id ?? null,
-          sale_id: insertedSale?.id ?? null,
-          delta: -l.qty,
-          reason: 'vente',
-        })
-        if (movError) console.error('Erreur mouvement:', movError)
-
-        if (activeBatch && willExhaustBatch) {
-          const now = new Date()
-          const receivedAt = new Date(activeBatch.received_at)
-          const durationDays = Math.round((now - receivedAt) / (1000 * 60 * 60 * 24))
-          const { error: batchUpdateError } = await supabase
-              .from('stock_batches')
-              .update({ exhausted_at: now.toISOString(), duration_days: durationDays })
-              .eq('id', activeBatch.id)
-          if (batchUpdateError) console.error('Erreur update batch:', batchUpdateError)
-        }
-      }
-
-      // Solde client mis à jour UNE seule fois pour tout le panier, avec les
-      // vrais totaux (pas la somme des parts arrondies par ligne ci-dessus,
-      // qui ne servent qu'à la traçabilité par ligne / l'annulation).
-      if (selectedClient) {
-        if (debtAddedTotal > 0) {
-          await supabase
-              .from('clients')
-              .update({ debt: round2((selectedClient.debt ?? 0) + debtAddedTotal) })
-              .eq('id', selectedClient.id)
-        }
-        const creditDelta = round2(newCreditFromChange - appliedCredit)
-        if (creditDelta !== 0) {
-          await supabase
-              .from('clients')
-              .update({ credit: round2((selectedClient.credit ?? 0) + creditDelta) })
-              .eq('id', selectedClient.id)
-        }
-      }
-
-      const usedMsg = appliedCredit > 0 ? ` · Credit used −${formatPrice(appliedCredit)} GH₵` : ''
-      const newMsg = (newCreditFromChange > 0 && selectedClient) ? ` · Credit +${formatPrice(newCreditFromChange)} GH₵` : ''
-      setReceiptData(buildReceiptData(false))
+      const usedMsg = serverCredit > 0 ? ` · Credit used −${formatPrice(serverCredit)} GH₵` : ''
+      const newMsg = (serverNewCredit > 0 && selectedClient) ? ` · Credit +${formatPrice(serverNewCredit)} GH₵` : ''
+      setReceiptData({ ...buildReceiptData(false), appliedCredit: serverCredit, newCredit: serverNewCredit })
       setCart([])
       onSuccess(`✓ Sale recorded — ${formatPrice(cartTotal)} GH₵${usedMsg}${newMsg}`)
     } catch (err) {
       console.error('Erreur vente panier:', err)
-      alert('Error while saving. Please try again.')
+      alert(err?.isNetwork
+        ? 'Could not reach the server. Please try again — the sale will not be recorded twice.'
+        : (err?.message || 'Error while saving. Please try again.'))
     } finally {
       setLoading(false)
     }
@@ -385,7 +288,7 @@ export default function CartSaleModal({ cart, setCart, onClose, onSuccess }) {
                       <div style={{ fontSize: '13px', fontWeight: '500', color: '#1A1A1A' }}>{l.product.name}</div>
                       <div style={{ fontSize: '11.5px', color: '#999' }}>{formatPrice(l.effectiveUnitPrice)} GH₵ / unit</div>
                       {l.insufficientStock && (
-                          <div style={{ fontSize: '11px', color: '#C45000' }}>⚠ Only {l.product.stock ?? 0} in stock</div>
+                          <div style={{ fontSize: '11px', color: '#C45000' }}>⚠ You hold only {myStock[l.product.id] ?? 0}</div>
                       )}
                     </div>
                     <div style={styles.qtyControlSm}>
