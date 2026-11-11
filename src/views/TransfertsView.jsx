@@ -12,6 +12,7 @@ import {
   markNotificationsRead, listColleagues,
   refreshMyStockCache, notifyTransfersChanged,
 } from '../lib/transfersApi'
+import { reasonLabel } from '../lib/inventoryApi'
 
 // Boîte « Transfers » (phase 3a) :
 //   • À traiter   : transferts reçus (accepter tout / une partie, refuser avec
@@ -43,7 +44,7 @@ function timeLeft(iso) {
   return `expires in ${Math.floor(h / 24)}d ${h % 24}h`
 }
 
-function describeNotification(n) {
+function describeNotification(n, uid) {
   const p = n.payload || {}
   const item = `${p.product_name ?? 'a product'}`
   switch (n.type) {
@@ -60,9 +61,31 @@ function describeNotification(n) {
     case 'transfer_expired':
       return { icon: '⏱️', text: `No answer from ${p.to_name} within 72 h: the transfer of ${p.qty} × ${item} expired. Your stock was not debited.` }
     case 'transfer_capped':
+      if (p.cause === 'reassignment') {
+        return p.qty_left > 0
+          ? { icon: '⚠️', text: `Transfer ${p.from_name} → ${p.to_name}: a manager reassigned part of ${p.from_name}'s stock. ${p.qty_left} × ${item} left in the transfer.` }
+          : { icon: '⚠️', text: `Transfer ${p.from_name} → ${p.to_name} of ${item} cancelled: a manager reassigned ${p.from_name}'s stock.` }
+      }
       return p.qty_left > 0
         ? { icon: '⚠️', text: `Transfer ${p.from_name} → ${p.to_name}: ${p.qty_sold} × ${item} were sold by the sender while offline. ${p.qty_left} left in the transfer.` }
         : { icon: '⚠️', text: `Transfer ${p.from_name} → ${p.to_name} of ${item} cancelled: the sender sold this stock while offline.` }
+    case 'inventory_discrepancy': {
+      // Écart d'inventaire (phase 3b) : pour les managers, ou pour la personne dont un manager a compté le stock
+      const whose = p.owner === uid ? 'your stock' : `${p.owner_name}'s stock`
+      const n = Math.abs(p.delta ?? 0)
+      const by = p.declared_by && p.declared_by !== p.owner ? ` Counted by ${p.declared_by === uid ? 'you' : p.declared_by_name}.` : ''
+      return {
+        icon: p.delta < 0 ? '📉' : '📈',
+        text: `Count of ${whose}: ${n} × ${item} ${p.delta < 0 ? 'missing' : 'more than expected'} (${reasonLabel(p.reason).toLowerCase()}${p.note ? ` — “${p.note}”` : ''}). Counted ${p.counted_qty}, expected ${p.expected_qty}.${by}`,
+      }
+    }
+    case 'stock_reassigned': {
+      const items = (p.items ?? []).slice(0, 3).map(i => `${i.qty} × ${i.product_name}`).join(', ')
+      const more = (p.items ?? []).length > 3 ? '…' : ''
+      const from = p.from_user === uid ? 'your stock' : `${p.from_name}'s stock`
+      const to = p.to_user === uid ? 'yours' : `${p.to_name}'s`
+      return { icon: '🔀', text: `${p.by_name} moved ${p.total_qty} unit(s) from ${from} to ${to}: ${items}${more}${p.note ? ` — “${p.note}”` : ''}` }
+    }
     case 'request_declined':
       return { icon: '↩️', text: `${p.target_name} declined your request for ${p.qty} × ${item}: “${p.decline_reason ?? ''}”` }
     case 'request_expired':
@@ -81,6 +104,7 @@ const STATUS_STYLE = {
   cancelled:          { label: 'Cancelled',       bg: '#F0F0F0', color: '#777' },
   expired:            { label: 'Expired',         bg: '#F0F0F0', color: '#777' },
   pending:            { label: 'Pending',         bg: '#EAF1FF', color: '#2F5FB3' },
+  reassigned:         { label: 'Reassigned',      bg: '#F1EAFF', color: '#6A3FB3' },
 }
 
 export default function TransfertsView({ onToast }) {
@@ -395,7 +419,7 @@ export default function TransfertsView({ onToast }) {
           <div style={s.sectionLabel}>Updates</div>
           <div style={s.card}>
             {news.map(n => {
-              const d = describeNotification(n)
+              const d = describeNotification(n, uid)
               return (
                 <div key={n.id} style={s.row}>
                   <div style={{ ...s.emoji, width: 34, height: 34, fontSize: 16, background: '#F5F5F5' }}>{d.icon}</div>
@@ -432,7 +456,8 @@ export default function TransfertsView({ onToast }) {
       ) : (
         <div style={s.card}>
           {history.map(h => {
-            const st = STATUS_STYLE[h.status] ?? STATUS_STYLE.cancelled
+            const isReassign = h.kind === 'reassignment'   // réattribution par un manager : sans acceptation
+            const st = isReassign ? STATUS_STYLE.reassigned : (STATUS_STYLE[h.status] ?? STATUS_STYLE.cancelled)
             const isTransfer = h._type === 'transfer'
             const title = isTransfer
               ? `${who(h.from_user, h.from_name)} → ${who(h.to_user, h.to_name)} · ${h.status === 'partially_accepted' ? `${h.qty_accepted}/${h.qty}` : (h.qty_accepted ?? h.qty)} × ${h.product_name}`
@@ -444,8 +469,11 @@ export default function TransfertsView({ onToast }) {
                 <div style={s.rowBody}>
                   <div style={{ ...s.rowTitle, fontWeight: 400 }}>{title}</div>
                   <div style={s.rowMeta}>
-                    {isTransfer ? 'Transfer' : 'Request'} · {fmtDate(h._date)}
+                    {isReassign
+                      ? `Reassigned by ${h.created_by === uid ? 'you' : (h.created_by_name ?? 'a manager')}`
+                      : (isTransfer ? 'Transfer' : 'Request')} · {fmtDate(h._date)}
                     {reason ? ` · “${reason}”` : ''}
+                    {isReassign && h.note ? ` · “${h.note}”` : ''}
                   </div>
                 </div>
                 <div style={{ ...s.statusBadge, background: st.bg, color: st.color }}>{st.label}</div>

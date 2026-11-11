@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
+import { fetchHoldersSummary } from '../lib/inventoryApi'
 
 // Écran réservé à l'administrateur (route protégée + fonctions SQL list_team /
 // set_user_role / set_user_active qui re-vérifient le rôle côté base).
@@ -50,7 +51,18 @@ export default function UsersView() {
     setActionError(null)
     const { error } = await supabase.rpc('set_user_active', { target_user_id: userId, is_active: actif })
     if (error) setActionError(error.message || 'Unable to update the account')
-    else setUsers(us => us.map(u => u.id === userId ? { ...u, active: actif } : u))
+    else {
+      setUsers(us => us.map(u => u.id === userId ? { ...u, active: actif } : u))
+      // Compte désactivé qui détient encore du stock : rappeler de le réattribuer
+      if (!actif) {
+        try {
+          const h = ((await fetchHoldersSummary()) ?? []).find(x => x.user_id === userId)
+          if (h && h.units > 0) {
+            setActionError(`Account disabled. It still holds ${h.units} unit(s) of stock: reassign them in Inventory › By person.`)
+          }
+        } catch { /* fonctions de la phase 3b pas encore déployées : on ignore */ }
+      }
+    }
     setBusyId(null)
   }
 

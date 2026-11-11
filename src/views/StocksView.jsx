@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import EditProductModal from '../components/EditProductModal'
+import HoldersPanel from '../components/HoldersPanel'
 import { downloadCsv } from '../lib/exportCsv'
 import { useAuth } from '../context/AuthContext'
 import { recordRestock, fetchStockOverview } from '../lib/stockApi'
@@ -24,7 +25,7 @@ export default function StocksView() {
   const [produitAEditer, setProduitAEditer] = useState(null)
 
   // Onglet : vue par produit (existante) ou grand livre de tous les lots
-  const [vue, setVue] = useState('produits') // 'produits' | 'grandLivre'
+  const [vue, setVue] = useState('produits') // 'produits' | 'grandLivre' | 'personnes'
   const [ledgerSearch, setLedgerSearch] = useState('')
   const [ledgerStatut, setLedgerStatut] = useState('all') // 'all' | 'active' | 'exhausted'
 
@@ -164,9 +165,9 @@ export default function StocksView() {
       <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
         <p style={s.titre}>Inventory</p>
 
-        {/* Onglets : vue par produit vs grand livre de tous les lots */}
+        {/* Onglets : vue par produit, grand livre de tous les lots, stock par personne (comptage, écarts) */}
         <div style={s.tabRow}>
-          {[['produits', 'Products'], ['grandLivre', 'Batch ledger']].map(([val, label]) => (
+          {[['produits', 'Products'], ['grandLivre', 'Batch ledger'], ['personnes', estGerant ? 'By person' : 'My stock']].map(([val, label]) => (
               <button
                   key={val}
                   onClick={() => setVue(val)}
@@ -177,7 +178,9 @@ export default function StocksView() {
           ))}
         </div>
 
-        {vue === 'grandLivre' ? (
+        {vue === 'personnes' ? (
+            <HoldersPanel onChanged={() => { fetchProduits(); fetchBatches(); fetchOverview() }} />
+        ) : vue === 'grandLivre' ? (
             <div>
               {/* KPIs grand livre */}
               <div style={s.kpiRow}>
@@ -617,7 +620,7 @@ const s = {
   loading: { color: '#999', fontSize: '14px', paddingTop: '20px' },
   titre: { fontFamily: "'DM Serif Display', serif", fontSize: '18px', color: '#1A1A1A', marginBottom: '16px' },
   tabRow: { display: 'flex', gap: '8px', marginBottom: '20px', background: '#F0F0F0', padding: '4px', borderRadius: '12px' },
-  tabBtn: { flex: 1, padding: '9px 14px', borderRadius: '9px', border: 'none', background: 'transparent', fontSize: '13px', fontWeight: '500', color: '#999', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  tabBtn: { flex: 1, padding: '9px 8px', borderRadius: '9px', border: 'none', background: 'transparent', fontSize: '13px', fontWeight: '500', color: '#999', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
   tabBtnActive: { background: 'white', color: '#1A1A1A', boxShadow: '0 1px 4px rgba(0,0,0,0.08)' },
   transferBtn: { padding: '6px 12px', borderRadius: '100px', border: '1.5px solid #EBEBEB', background: 'white', color: '#1A1A1A', fontFamily: "'DM Sans', sans-serif", fontSize: '12px', fontWeight: '500', cursor: 'pointer' },
   exportBtn: { padding: '6px 12px', borderRadius: '100px', border: '1.5px solid #EBEBEB', background: 'white', color: '#999', fontFamily: "'DM Sans', sans-serif", fontSize: '12px', cursor: 'pointer', marginLeft: 'auto' },
