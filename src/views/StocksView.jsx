@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import EditProductModal from '../components/EditProductModal'
 import { downloadCsv } from '../lib/exportCsv'
@@ -8,6 +9,7 @@ import { notifyCacheUpdated } from '../lib/offlineCache'
 
 export default function StocksView() {
   const { estGerant, user } = useAuth()
+  const navigate = useNavigate()
   const [overview, setOverview] = useState([])      // qui détient quoi : [{ product_id, owner_id, owner_name, qty, reserved }]
   const [nouveauCout, setNouveauCout] = useState('') // prix d'achat unitaire du nouveau lot
   const [restockError, setRestockError] = useState(null)
@@ -422,6 +424,28 @@ export default function StocksView() {
                                       </div>
                                   ))
                               )}
+                              {/* Raccourcis vers la boîte « Transfers » (transfert / demande de stock) */}
+                              {(() => {
+                                const holders = overviewByProduct[p.id] ?? []
+                                const mine = holders.find(h => h.owner_id === user?.id)
+                                const canSend = !!mine && mine.qty - mine.reserved > 0
+                                const canAsk = holders.some(h => h.owner_id !== user?.id && h.qty - h.reserved > 0)
+                                if (!canSend && !canAsk) return null
+                                return (
+                                    <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                                      {canSend && (
+                                          <button style={s.transferBtn} onClick={() => navigate('/transferts', { state: { action: 'send', productId: p.id } })}>
+                                            ↗ Send to a colleague
+                                          </button>
+                                      )}
+                                      {canAsk && (
+                                          <button style={s.transferBtn} onClick={() => navigate('/transferts', { state: { action: 'request', productId: p.id } })}>
+                                            ↙ Request stock
+                                          </button>
+                                      )}
+                                    </div>
+                                )
+                              })()}
                             </div>
                             {productBatches.length === 0 ? (
                                 <div style={{ padding: '16px', textAlign: 'center', color: '#BBB', fontSize: '12px' }}>
@@ -595,6 +619,7 @@ const s = {
   tabRow: { display: 'flex', gap: '8px', marginBottom: '20px', background: '#F0F0F0', padding: '4px', borderRadius: '12px' },
   tabBtn: { flex: 1, padding: '9px 14px', borderRadius: '9px', border: 'none', background: 'transparent', fontSize: '13px', fontWeight: '500', color: '#999', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
   tabBtnActive: { background: 'white', color: '#1A1A1A', boxShadow: '0 1px 4px rgba(0,0,0,0.08)' },
+  transferBtn: { padding: '6px 12px', borderRadius: '100px', border: '1.5px solid #EBEBEB', background: 'white', color: '#1A1A1A', fontFamily: "'DM Sans', sans-serif", fontSize: '12px', fontWeight: '500', cursor: 'pointer' },
   exportBtn: { padding: '6px 12px', borderRadius: '100px', border: '1.5px solid #EBEBEB', background: 'white', color: '#999', fontFamily: "'DM Sans', sans-serif", fontSize: '12px', cursor: 'pointer', marginLeft: 'auto' },
   searchIcon: { position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#CCC', fontSize: '15px', lineHeight: 1 },
   searchInput: { width: '100%', padding: '11px 16px 11px 38px', borderRadius: '12px', border: '1.5px solid #EBEBEB', fontSize: '14px', fontFamily: "'DM Sans', sans-serif", color: '#1A1A1A', outline: 'none', boxSizing: 'border-box', background: 'white' },

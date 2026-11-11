@@ -12,6 +12,7 @@ import ProduitsView from './views/ProduitsView'
 import ClientsView from './views/ClientsView'
 import StocksView from './views/StocksView'
 import UsersView from './views/UsersView'
+import TransfertsView from './views/TransfertsView'
 import BarcodeScanner from './components/BarcodeScanner'
 import SaleModal from './components/SaleModal'
 import CartSaleModal from './components/CartSaleModal'
@@ -20,6 +21,7 @@ import Toast from './components/Toast'
 import { supabase } from './lib/supabase'
 import { getCachedProducts } from './lib/offlineCache'
 import { useOfflineSync } from './hooks/useOfflineSync'
+import { useTransfersBadge } from './hooks/useTransfersBadge'
 import { st } from './styles/styles.js'
 
 // Navigation : cashier voit seulement Sales + Products
@@ -65,6 +67,8 @@ function AppLayout() {
   const [scanPulse,    setScanPulse]    = useState(false)
 
   const { pendingCount, syncing, syncNow } = useOfflineSync()
+  // Pastille : transferts / demandes à traiter + nouvelles non lues
+  const { badge: transfersBadge } = useTransfersBadge()
 
   const showToast = (msg) => {
     setToast(msg)
@@ -150,6 +154,28 @@ function AppLayout() {
                 </svg>
                 Scan
               </button>
+              {/* Boîte « Transfers » : transferts de stock, demandes, notifications */}
+              <button
+                  style={{ ...st.logoutBtn, position: 'relative', color: location.pathname === '/transferts' ? '#1A1A1A' : '#888' }}
+                  onClick={() => navigate('/transferts')}
+                  title="Transfers"
+                  aria-label={transfersBadge > 0 ? `Transfers (${transfersBadge} new)` : 'Transfers'}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/>
+                  <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
+                </svg>
+                {transfersBadge > 0 && (
+                    <span style={{
+                      position: 'absolute', top: '-2px', right: '-4px', minWidth: '17px', height: '17px',
+                      padding: '0 4px', borderRadius: '100px', background: '#E84B6E', color: 'white',
+                      fontSize: '10.5px', fontWeight: '600', lineHeight: '17px', textAlign: 'center',
+                      boxSizing: 'border-box', fontFamily: "'DM Sans',sans-serif",
+                    }}>
+                      {transfersBadge > 9 ? '9+' : transfersBadge}
+                    </span>
+                )}
+              </button>
               <button style={st.logoutBtn} onClick={logout} title="Sign out">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
@@ -177,6 +203,7 @@ function AppLayout() {
               </RoleGuard>
             } />
             <Route path="/stocks" element={<StocksView />} />
+            <Route path="/transferts" element={<TransfertsView onToast={showToast} />} />
             <Route path="/team" element={
               <RoleGuard requireAdmin>
                 <UsersView />

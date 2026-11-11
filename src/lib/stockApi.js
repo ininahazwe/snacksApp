@@ -16,7 +16,8 @@ export function newRequestId() {
   })
 }
 
-async function rpc(name, args) {
+// Appel d'une fonction SQL ; l'erreur porte .code et .isNetwork (aussi utilisé par transfersApi)
+export async function rpc(name, args) {
   const { data, error } = await supabase.rpc(name, args)
   if (error) {
     const err = new Error(error.message || `Operation failed (${name})`)
