@@ -12,15 +12,15 @@ import {
   markNotificationsRead, listColleagues,
   refreshMyStockCache, notifyTransfersChanged,
 } from '../lib/transfersApi'
-import { reasonLabel } from '../lib/inventoryApi'
+import { reasonLabel, fetchInventoryHistory } from '../lib/inventoryApi'
 
 // Boîte « Transfers » (phase 3a) :
 //   • À traiter   : transferts reçus (accepter tout / une partie, refuser avec
 //                   motif) et demandes de stock reçues (envoyer ou décliner) ;
 //   • En attente  : mes envois et mes demandes sans réponse (annulables) ;
 //   • Nouvelles   : acceptations, refus, expirations… (pastille) ;
-//   • Historique  : transferts et demandes terminés (toute l'équipe pour un
-//                   manager/admin).
+//   • Historique  : transferts, demandes et écarts d'inventaire (toute
+//                   l'équipe pour un manager/admin).
 // Un envoi RÉSERVE la quantité chez l'expéditeur (« in transit ») : elle n'est
 // plus vendable, mais n'est débitée qu'à l'acceptation. Sans réponse sous 72 h
 // le transfert expire et rien n'est débité. Tout exige d'être en ligne.
@@ -105,6 +105,8 @@ const STATUS_STYLE = {
   expired:            { label: 'Expired',         bg: '#F0F0F0', color: '#777' },
   pending:            { label: 'Pending',         bg: '#EAF1FF', color: '#2F5FB3' },
   reassigned:         { label: 'Reassigned',      bg: '#F1EAFF', color: '#6A3FB3' },
+  shortage:           { label: 'Shortage',        bg: '#FFF0E8', color: '#C45000' },
+  surplus:            { label: 'Surplus',         bg: '#E8F5EC', color: '#2E7D42' },
 }
 
 export default function TransfertsView({ onToast }) {
@@ -116,6 +118,7 @@ export default function TransfertsView({ onToast }) {
   const { myStock, refresh: refreshMyStock } = useMyStock()
 
   const [inbox, setInbox] = useState(EMPTY_INBOX)
+  const [inventoryRows, setInventoryRows] = useState([])   // écarts d'inventaire (historique)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
   const [actionError, setActionError] = useState(null)
@@ -135,6 +138,11 @@ export default function TransfertsView({ onToast }) {
 
   const loadInbox = useCallback(async (all) => {
     if (!navigator.onLine) { setLoading(false); return }
+    // Écarts d'inventaire : lecture indépendante — si le correctif SQL n'est pas
+    // encore appliqué, l'historique reste simplement sans inventaires.
+    fetchInventoryHistory(all)
+      .then(rows => setInventoryRows(Array.isArray(rows) ? rows : []))
+      .catch(() => setInventoryRows([]))
     try {
       const data = await fetchInbox(all)
       const next = { ...EMPTY_INBOX, ...(data || {}) }
@@ -274,9 +282,10 @@ export default function TransfertsView({ onToast }) {
     const rows = [
       ...inbox.history_transfers.map(t => ({ ...t, _type: 'transfer', _date: t.responded_at ?? t.created_at })),
       ...inbox.history_requests.map(r => ({ ...r, _type: 'request', _date: r.responded_at ?? r.created_at })),
+      ...inventoryRows.map(c => ({ ...c, _type: 'inventory', _date: c.created_at })),
     ]
     return rows.sort((a, b) => new Date(b._date) - new Date(a._date))
-  }, [inbox.history_transfers, inbox.history_requests])
+  }, [inbox.history_transfers, inbox.history_requests, inventoryRows])
 
   const canSend = Object.values(myStock).some(q => q > 0)
 
@@ -452,10 +461,33 @@ export default function TransfertsView({ onToast }) {
         )}
       </div>
       {history.length === 0 ? (
-        <div style={s.emptyCard}>No transfer yet</div>
+        <div style={s.emptyCard}>No activity yet</div>
       ) : (
         <div style={s.card}>
           {history.map(h => {
+            if (h._type === 'inventory') {
+              // Inventaire : écart appliqué tout de suite (manque ou excédent)
+              const short = h.delta < 0
+              const st = short ? STATUS_STYLE.shortage : STATUS_STYLE.surplus
+              const whose = h.owner_id === uid ? 'Your stock' : `${h.owner_name ?? 'Unknown'}'s stock`
+              const by = h.declared_by === uid ? 'you' : (h.declared_by_name ?? 'a manager')
+              return (
+                <div key={`inventory-${h.id}`} style={s.row}>
+                  {emojiBox(h, 34)}
+                  <div style={s.rowBody}>
+                    <div style={{ ...s.rowTitle, fontWeight: 400 }}>
+                      {`${whose} · ${short ? '−' : '+'}${Math.abs(h.delta)} × ${h.product_name}`}
+                    </div>
+                    <div style={s.rowMeta}>
+                      {`Count by ${by} · ${fmtDate(h._date)} · ${reasonLabel(h.reason)}`}
+                      {h.note ? ` · “${h.note}”` : ''}
+                      {` · counted ${h.counted_qty}, expected ${h.expected_qty}`}
+                    </div>
+                  </div>
+                  <div style={{ ...s.statusBadge, background: st.bg, color: st.color }}>{st.label}</div>
+                </div>
+              )
+            }
             const isReassign = h.kind === 'reassignment'   // réattribution par un manager : sans acceptation
             const st = isReassign ? STATUS_STYLE.reassigned : (STATUS_STYLE[h.status] ?? STATUS_STYLE.cancelled)
             const isTransfer = h._type === 'transfer'

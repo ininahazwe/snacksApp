@@ -27,6 +27,11 @@ export const fetchHoldersSummary = () => rpc('holders_summary', {})
 // Détail d'une personne : { holdings, counts, movements } (null = soi-même)
 export const fetchHolderDetail = (owner = null) => rpc('holder_detail', { p_owner: owner })
 
+// Écarts d'inventaire pour l'historique de l'écran Transfers (p_all : toute
+// l'équipe, manager/admin). Fonction ajoutée par le correctif
+// phase3b_patch_historique_inventaires.sql — absente = simplement pas affiché.
+export const fetchInventoryHistory = (all = false) => rpc('inventory_history', { p_all: all })
+
 // Motifs d'écart (mêmes codes que la base)
 export const SHORTAGE_REASONS = [
   ['damaged', 'Damaged / broken'],
