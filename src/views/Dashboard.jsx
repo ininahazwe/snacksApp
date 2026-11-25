@@ -166,21 +166,23 @@ export default function Dashboard({ onProductTap }) {
     setLoading(true)
     const { start, end } = getPeriodRange(period, customStart, customEnd)
 
-    // Toutes les requêtes sur `sales` excluent les ventes annulées
-    // (cancelled_at IS NULL) : elles restent en base pour l'audit mais ne
-    // doivent pas polluer le chiffre d'affaires ni les classements.
+    // Tous les calculs lisent la vue `sales_active` (lignes non annulées,
+    // phase 4) : les ventes annulées restent dans `sales` pour l'audit mais ne
+    // polluent ni le chiffre d'affaires ni les classements. Les lignes
+    // 'paiement'/'avoir' (mouvements de solde client) sont aussi exclues des
+    // indicateurs de vente : un remboursement n'est pas un achat.
     let periodQuery = supabase
-        .from('sales')
+        .from('sales_active')
         .select('amount, type, product_id, qty, client_id, created_at, products(name,emoji)')
         .lte('created_at', end.toISOString())
-        .is('cancelled_at', null)
+        .in('type', ['cash', 'dette'])
     if (start) periodQuery = periodQuery.gte('created_at', start.toISOString())
 
     const [{ data: periodSales }, { data: clientsData }, { data: stocksData }, { data: recentes }, { data: stockDetails }] = await Promise.all([
       periodQuery,
       supabase.from('clients').select('id, debt, name'),
       supabase.from('products').select('id, stock, name, emoji').lt('stock', 10),
-      supabase.from('sales').select('id, amount, type, created_at, original_amount, discount_reason, products(name,emoji), clients(name)').is('cancelled_at', null).order('created_at', { ascending: false }).limit(5),
+      supabase.from('sales_active').select('id, amount, type, created_at, original_amount, discount_reason, products(name,emoji), clients(name)').order('created_at', { ascending: false }).limit(5),
       supabase.from('products').select('id, stock, name, emoji').order('stock', { ascending: true }).limit(10),
     ])
 

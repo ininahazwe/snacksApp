@@ -6,8 +6,45 @@ import { downloadCsv } from '../lib/exportCsv'
 import { useAuth } from '../context/AuthContext'
 import { cancelSales } from '../lib/stockApi'
 
+// Plage de dates de la liste (heure locale). end = fin de journée incluse.
+const LIST_PERIODS = [
+  { id: 'today', label: 'Today' },
+  { id: '7d', label: '7 days' },
+  { id: '30d', label: '30 days' },
+  { id: 'month', label: 'This month' },
+  { id: 'all', label: 'All time' },
+  { id: 'custom', label: 'Custom' },
+]
+
+function listRange(period, from, to) {
+  const now = new Date()
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const daysAgo = (n) => { const d = startOfDay(now); d.setDate(d.getDate() - n); return d }
+  switch (period) {
+    case 'today': return { start: startOfDay(now), end: null }
+    case '7d':    return { start: daysAgo(6), end: null }
+    case '30d':   return { start: daysAgo(29), end: null }
+    case 'month': return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: null }
+    case 'custom': return {
+      start: from ? new Date(from + 'T00:00:00') : null,
+      end:   to   ? new Date(to + 'T23:59:59.999') : null,
+    }
+    default: return { start: null, end: null }
+  }
+}
+
 export default function VentesView() {
-  const { estGerant } = useAuth()
+  // Phase 5 : la liste ne montre que les ventes de l'utilisateur connecté
+  // (manager comme cashier) ; l'admin voit celles de tout le monde et peut
+  // filtrer par vendeur. Filtre d'écran : les règles d'accès (RLS) ne changent
+  // pas, le Dashboard et le calcul de profit d'un manager restent « équipe ».
+  // Annulation : l'admin annule tout, un manager seulement ses propres lignes
+  // (contrôlé aussi par cancel_sales, phase5_ventes_par_utilisateur.sql).
+  const { estGerant, estAdmin, user } = useAuth()
+  const [listPeriod, setListPeriod] = useState('all')
+  const [listFrom, setListFrom] = useState('')
+  const [listTo, setListTo] = useState('')
+  const [sellerFilter, setSellerFilter] = useState('all') // admin : 'all' | 'none' | user id
   const [sales, setSales] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('toutes') // toutes, payees, dettes
@@ -23,20 +60,35 @@ export default function VentesView() {
   const [visibleCount, setVisibleCount] = useState(10)
   const [showCancelled, setShowCancelled] = useState(false)
 
-  useEffect(() => { fetchSales(); fetchUsers() }, [])
+  useEffect(() => { fetchUsers() }, [])
+  useEffect(() => {
+    fetchSales()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listPeriod, listFrom, listTo, sellerFilter, estAdmin, user?.id])
 
   // Revenir à 10 ventes affichées dès que le filtre ou la recherche change,
   // sinon "load more" garderait un nombre incohérent avec la nouvelle liste
-  useEffect(() => { setVisibleCount(10) }, [filter, search, showCancelled])
+  useEffect(() => { setVisibleCount(10) }, [filter, search, showCancelled, listPeriod, listFrom, listTo, sellerFilter])
 
   const fetchSales = async () => {
     // On récupère aussi les ventes annulées (cancelled_at) : elles sont
     // conservées en base (soft-delete) pour la traçabilité, et affichées à
     // part sur demande plutôt que d'être définitivement supprimées.
-    const { data } = await supabase
+    if (!user?.id) return
+    let q = supabase
         .from('sales')
         .select('id, product_id, client_id, user_id, qty, amount, type, created_at, debt_added, debt_repaid, credit_used, credit_created, cancelled_at, batch_id, batch_was_exhausted, original_amount, discount_reason, group_id, needs_review, unfulfilled_qty, cost_amount, products(name, emoji, price, cost), clients(name)')
         .order('created_at', { ascending: false })
+    // Vendeur : soi-même, sauf pour l'admin (tous, ou un vendeur choisi)
+    if (!estAdmin) q = q.eq('user_id', user.id)
+    else if (sellerFilter === 'none') q = q.is('user_id', null)
+    else if (sellerFilter !== 'all') q = q.eq('user_id', sellerFilter)
+    // Dates
+    const { start, end } = listRange(listPeriod, listFrom, listTo)
+    if (start) q = q.gte('created_at', start.toISOString())
+    if (end) q = q.lte('created_at', end.toISOString())
+    const { data, error } = await q
+    if (error) console.error(error)
     setSales(data ?? [])
     setLoading(false)
   }
@@ -68,12 +120,12 @@ export default function VentesView() {
     // et les lignes 'paiement'/'avoir' (ce sont des mouvements de solde client, pas du
     // chiffre d'affaires — sinon un remboursement de dette se retrouvait compté une
     // seconde fois comme "Credit sales").
+    // (vue sales_active, phase 4 : lignes non annulées uniquement)
     const { data: periodSales } = await supabase
-        .from('sales')
+        .from('sales_active')
         .select('id, product_id, qty, amount, type, cost_amount, products(name, emoji, price, cost)')
         .gte('created_at', start)
         .lte('created_at', end)
-        .is('cancelled_at', null)
         .in('type', ['cash', 'dette'])
 
     if (!periodSales || periodSales.length === 0) {
@@ -214,14 +266,70 @@ export default function VentesView() {
     downloadCsv(`ventes_${stamp}.csv`, headers, rows)
   }
 
+  // Admin : toutes les lignes ; manager : seulement les siennes ; cashier : aucune
+  const canCancel = (s) => estAdmin || (estGerant && !!user && s.user_id === user.id)
+
   if (loading) return <div style={{ color: '#999', fontSize: '14px', paddingTop: '20px', fontFamily: "'DM Sans', sans-serif" }}>Loading…</div>
 
   return (
       <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
         {/* Header */}
-        <p style={{ fontFamily: "'DM Serif Display', serif", fontSize: '18px', color: '#1A1A1A', marginBottom: estGerant ? '16px' : '4px' }}>Sales</p>
-        {!estGerant && (
-            <p style={{ fontSize: '12px', color: '#999', margin: '0 0 16px' }}>Your sales only</p>
+        <p style={{ fontFamily: "'DM Serif Display', serif", fontSize: '18px', color: '#1A1A1A', marginBottom: '4px' }}>Sales</p>
+        <p style={{ fontSize: '12px', color: '#999', margin: '0 0 16px' }}>
+          {estAdmin ? 'All users' : 'Your sales only'}
+        </p>
+
+        {/* Période */}
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
+          {LIST_PERIODS.map(p => (
+              <button
+                  key={p.id}
+                  onClick={() => setListPeriod(p.id)}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '100px',
+                    border: '1.5px solid',
+                    borderColor: listPeriod === p.id ? '#1A1A1A' : '#EBEBEB',
+                    background: listPeriod === p.id ? '#1A1A1A' : 'white',
+                    color: listPeriod === p.id ? 'white' : '#999',
+                    fontFamily: "'DM Sans', sans-serif",
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                  }}
+              >
+                {p.label}
+              </button>
+          ))}
+        </div>
+        {listPeriod === 'custom' && (
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
+              {[['From', listFrom, setListFrom], ['To', listTo, setListTo]].map(([label, value, set]) => (
+                  <div key={label} style={{ flex: 1 }}>
+                    <label style={{ fontSize: '11px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.6px', display: 'block', marginBottom: '4px' }}>{label}</label>
+                    <input
+                        type="date"
+                        value={value}
+                        onChange={e => set(e.target.value)}
+                        style={{ width: '100%', padding: '9px 10px', borderRadius: '10px', border: '1.5px solid #EBEBEB', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", boxSizing: 'border-box', background: 'white' }}
+                    />
+                  </div>
+              ))}
+            </div>
+        )}
+
+        {/* Vendeur (admin) */}
+        {estAdmin && (
+            <select
+                value={sellerFilter}
+                onChange={e => setSellerFilter(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: '12px', border: '1.5px solid #EBEBEB', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", background: 'white', color: '#1A1A1A', marginBottom: '12px' }}
+            >
+              <option value="all">All sellers</option>
+              {Object.entries(usersById)
+                  .sort((a, b) => (a[1] ?? '').localeCompare(b[1] ?? ''))
+                  .map(([id, email]) => <option key={id} value={id}>{email ?? id}</option>)}
+              <option value="none">No seller recorded (history)</option>
+            </select>
         )}
 
         {/* Filtres par type */}
@@ -390,7 +498,7 @@ export default function VentesView() {
                         )}
                         {s.group_id && (
                             <div style={{ fontSize: '10px', color: '#999', marginTop: '1px' }}>
-                              🧺 Part of a multi-item sale
+                              {s.type === 'paiement' || s.type === 'avoir' ? '🔗 Payment + store credit (recorded together)' : '🧺 Part of a multi-item sale'}
                             </div>
                         )}
                         {s.needs_review && (
@@ -425,7 +533,7 @@ export default function VentesView() {
                             🖨️
                           </button>
                       )}
-                      {!estGerant ? null : isCancelled ? (
+                      {!canCancel(s) ? null : isCancelled ? (
                           <div style={{ width: '27px', flexShrink: 0 }} />
                       ) : (
                           <button
@@ -436,10 +544,10 @@ export default function VentesView() {
                             🗑️
                           </button>
                       )}
-                      {estGerant && !isCancelled && s.group_id && (
+                      {canCancel(s) && !isCancelled && s.group_id && (
                           <button
                               onClick={() => setGroupToCancel(s.group_id)}
-                              title="Cancel entire cart"
+                              title={s.type === 'paiement' || s.type === 'avoir' ? 'Cancel payment and store credit' : 'Cancel entire cart'}
                               style={iconActionStyles}
                           >
                             🧺✕
@@ -479,7 +587,7 @@ export default function VentesView() {
         {/* CALENDRIER CALCUL PROFIT */}
         {estGerant && (
         <div style={{ background: '#F9F9F9', borderRadius: '18px', padding: '20px', marginBottom: '24px' }}>
-          <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '16px', color: '#1A1A1A', marginBottom: '16px' }}>📅 Profit Calculator</div>
+          <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '16px', color: '#1A1A1A', marginBottom: '16px' }}>📅 Profit Calculator <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '11px', color: '#999' }}>· whole team</span></div>
 
           <div style={{ display: 'flex', gap: '12px', marginBottom: '12px' }}>
             <div style={{ flex: 1 }}>
@@ -606,7 +714,7 @@ export default function VentesView() {
                       : `${saleToCancel.products?.name ?? 'Product'} · x${saleToCancel.qty} · ${saleToCancel.amount?.toLocaleString()} GH₵`}
                   <br />
                   {saleToCancel.product_id ? 'Stock will be restored. ' : ''}
-                  {saleToCancel.client_id ? "The client's debt and store credit will be reversed to exactly what they were before this transaction. " : ''}
+                  {saleToCancel.client_id ? "The client's debt and store credit will be reversed (store credit restored if it was used; if credit created here was already spent, that amount becomes debt again). " : ''}
                   The record stays in the history, marked as cancelled.
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
@@ -678,11 +786,13 @@ export default function VentesView() {
                   onClick={e => e.stopPropagation()}
               >
                 <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: '18px', color: '#1A1A1A', marginBottom: '8px' }}>
-                  Cancel this entire cart?
+                  {sales.some(s => s.group_id === groupToCancel && !s.product_id) ? 'Cancel this payment?' : 'Cancel this entire cart?'}
                 </div>
                 <div style={{ fontSize: '13px', color: '#999', marginBottom: '16px', lineHeight: '1.5' }}>
-                  {sales.filter(s => s.group_id === groupToCancel && !s.cancelled_at).length} item(s) from this multi-product sale will be cancelled.
-                  Stock will be restored for each, and the client's debt and store credit will be reversed to exactly what they were before this transaction.
+                  {sales.some(s => s.group_id === groupToCancel && !s.product_id)
+                      ? 'The debt payment and the store credit recorded with it will be cancelled together. '
+                      : `${sales.filter(s => s.group_id === groupToCancel && !s.cancelled_at).length} item(s) from this multi-product sale will be cancelled. Stock will be restored for each. `}
+                  The client's debt and store credit will be reversed; if store credit created here was already spent, that amount becomes debt again.
                   The records stay in the history, marked as cancelled.
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>

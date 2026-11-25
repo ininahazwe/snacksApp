@@ -1,8 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { formatPrice, round2 } from '../lib/format'
+import { useAuth } from '../context/AuthContext'
+import { recordClientPayment, applyClientCredit, newRequestId, clientMovementError } from '../lib/clientsApi'
 
 export default function ClientsView() {
+  // Manager/admin : gestion complète des clients. Cashier (phase 4) : encaisse
+  // (paiement de dette, dépôt d'avoir, utilisation de l'avoir) sans créer,
+  // renommer ni supprimer de client ; il ne voit que ses propres opérations.
+  const { estGerant } = useAuth()
   const [clients, setClients] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedClient, setSelectedClient] = useState(null)
@@ -44,7 +50,9 @@ export default function ClientsView() {
     setMontantRemboursement('')
     setEditingNom(false)
     setConfirmDelete(false)
-    setSurplusPaiement(null)
+    setSurplusChoice(null)
+    setResultat(null)
+    setErreurPaiement(null)
     setVisibleHistCount(10)
     setLoadingHistorique(true)
     // Historique complet du client (plus de plafond à 20) : affiché ensuite
@@ -62,103 +70,97 @@ export default function ClientsView() {
     setSelectedClient(null)
     setEditingNom(false)
     setConfirmDelete(false)
-    setSurplusPaiement(null)
+    setSurplusChoice(null)
+    setResultat(null)
+    setErreurPaiement(null)
   }
 
-  const enregistrerPaiement = async () => {
-    const montant = parseFloat(montantRemboursement)
-    if (!montant || montant <= 0) return
-    setSavingPaiement(true)
+  // ── Mouvements de compte : paiement, dépôt d'avoir, utilisation de l'avoir ──
+  // Chaque action = UNE fonction SQL (atomique, soldes lus et verrouillés en
+  // base, acteur enregistré). L'identifiant de requête est conservé tant que
+  // l'action n'a pas abouti : un double clic ou un nouvel essai après une
+  // coupure réseau ne crée jamais deux paiements.
+  const pendingReq = useRef({ key: null, id: null })
+  const requestIdFor = (key) => {
+    if (pendingReq.current.key !== key) pendingReq.current = { key, id: newRequestId() }
+    return pendingReq.current.id
+  }
+  const oublierRequete = () => { pendingReq.current = { key: null, id: null } }
 
-    const dette = selectedClient.debt
-    const montantApplique = round2(Math.min(montant, dette))
-    const surplus = round2(Math.max(0, montant - dette))
-    const nouvelleDette = round2(Math.max(0, dette - montant))
+  // Trop-perçu : { amount, surplus } en attente du choix « avoir » / « monnaie rendue »
+  const [surplusChoice, setSurplusChoice] = useState(null)
+  // Dernier mouvement enregistré : { text, change }
+  const [resultat, setResultat] = useState(null)
+  const [erreurPaiement, setErreurPaiement] = useState(null)
 
-    await supabase
-        .from('clients')
-        .update({ debt: nouvelleDette })
-        .eq('id', selectedClient.id)
-    // Tracer le paiement dans l'historique d'achats (seulement la part qui a réglé la dette)
-    await supabase.from('sales').insert({
-      client_id: selectedClient.id,
-      product_id: null,
-      qty: 0,
-      amount: montantApplique,
-      type: 'paiement',
-      debt_repaid: montantApplique,
-    })
-    const clientMaj = { ...selectedClient, debt: nouvelleDette }
+  const appliquerSoldes = (r) => {
+    const clientMaj = { ...selectedClient, debt: Number(r.debt), credit: Number(r.credit) }
     setSelectedClient(clientMaj)
     setClients(cs => cs.map(c => c.id === clientMaj.id ? clientMaj : c))
-    setMontantRemboursement('')
-    setSavingPaiement(false)
-    await rafraichirHistorique(selectedClient.id)
+  }
 
-    // Si le client a versé plus que sa dette, proposer de convertir le surplus en avoir
-    if (surplus > 0) {
-      setSurplusPaiement(surplus)
+  const decrireResultat = (r) => {
+    const parts = []
+    if (Number(r.credit_used) > 0) parts.push(`${formatPrice(r.credit_used)} GH₵ of store credit applied to the debt`)
+    else if (Number(r.debt_repaid) > 0) parts.push(`${formatPrice(r.debt_repaid)} GH₵ debt repaid`)
+    if (Number(r.credit_created) > 0) parts.push(`${formatPrice(r.credit_created)} GH₵ added as store credit`)
+    return { text: parts.join(' · ') || 'Recorded', change: Number(r.change_due ?? 0) }
+  }
+
+  const envoyerPaiement = async (montant, surplus) => {
+    setSavingPaiement(true)
+    setErreurPaiement(null)
+    setResultat(null)
+    try {
+      const reqId = requestIdFor(`pay|${selectedClient.id}|${montant}|${surplus}`)
+      const r = await recordClientPayment(selectedClient.id, montant, surplus, reqId)
+      oublierRequete()
+      appliquerSoldes(r)
+      setResultat(decrireResultat(r))
+      setMontantRemboursement('')
+      setSurplusChoice(null)
+      await rafraichirHistorique(selectedClient.id)
+    } catch (err) {
+      setErreurPaiement(clientMovementError(err))
+    } finally {
+      setSavingPaiement(false)
     }
   }
 
-  // ── Surplus de paiement → proposition de conversion en avoir ────────────────
-  const [surplusPaiement, setSurplusPaiement] = useState(null)
-  const [convertingSurplus, setConvertingSurplus] = useState(false)
-
-  const convertirSurplusEnAvoir = async () => {
-    if (!surplusPaiement) return
-    setConvertingSurplus(true)
-    const nouvelAvoir = round2(selectedClient.credit + surplusPaiement)
-    await supabase
-        .from('clients')
-        .update({ credit: nouvelAvoir })
-        .eq('id', selectedClient.id)
-    // Tracer la conversion dans l'historique — sans cette ligne, l'avoir apparaissait
-    // "de nulle part" et une annulation ultérieure n'aurait rien à défaire.
-    await supabase.from('sales').insert({
-      client_id: selectedClient.id,
-      product_id: null,
-      qty: 0,
-      amount: surplusPaiement,
-      type: 'avoir',
-      credit_created: surplusPaiement,
-    })
-    const clientMaj = { ...selectedClient, credit: nouvelAvoir }
-    setSelectedClient(clientMaj)
-    setClients(cs => cs.map(c => c.id === clientMaj.id ? clientMaj : c))
-    setConvertingSurplus(false)
-    setSurplusPaiement(null)
-    await rafraichirHistorique(selectedClient.id)
+  const enregistrerPaiement = () => {
+    const montant = round2(parseFloat(montantRemboursement))
+    if (!montant || montant <= 0) return
+    const dette = Math.max(0, selectedClient.debt ?? 0)
+    // Trop-perçu : on demande AVANT d'enregistrer s'il devient de l'avoir ou
+    // si la monnaie est rendue. Client sans dette : dépôt d'avoir.
+    // (Si la dette réelle en base est plus faible que celle affichée, la base
+    // convertit l'excédent en avoir et le message l'indique.)
+    if (dette > 0 && montant > dette) {
+      setSurplusChoice({ amount: montant, surplus: round2(montant - dette) })
+      return
+    }
+    envoyerPaiement(montant, 'credit')
   }
 
   // ── Utiliser l'avoir pour solder (tout ou partie) la dette ──────────────────
   const [usingCredit, setUsingCredit] = useState(false)
 
   const utiliserAvoir = async () => {
-    const montantUtilise = round2(Math.min(selectedClient.credit, selectedClient.debt))
-    if (montantUtilise <= 0) return
+    if (round2(Math.min(selectedClient.credit, selectedClient.debt)) <= 0) return
     setUsingCredit(true)
-    const nouvelleDette = round2(selectedClient.debt - montantUtilise)
-    const nouvelAvoir = round2(selectedClient.credit - montantUtilise)
-    await supabase
-        .from('clients')
-        .update({ debt: nouvelleDette, credit: nouvelAvoir })
-        .eq('id', selectedClient.id)
-    // Tracer l'utilisation de l'avoir dans l'historique d'achats
-    await supabase.from('sales').insert({
-      client_id: selectedClient.id,
-      product_id: null,
-      qty: 0,
-      amount: montantUtilise,
-      type: 'paiement',
-      debt_repaid: montantUtilise,
-      credit_used: montantUtilise,
-    })
-    const clientMaj = { ...selectedClient, debt: nouvelleDette, credit: nouvelAvoir }
-    setSelectedClient(clientMaj)
-    setClients(cs => cs.map(c => c.id === clientMaj.id ? clientMaj : c))
-    setUsingCredit(false)
-    await rafraichirHistorique(selectedClient.id)
+    setErreurPaiement(null)
+    setResultat(null)
+    try {
+      const r = await applyClientCredit(selectedClient.id, requestIdFor(`credit|${selectedClient.id}`))
+      oublierRequete()
+      appliquerSoldes(r)
+      setResultat(decrireResultat(r))
+      await rafraichirHistorique(selectedClient.id)
+    } catch (err) {
+      setErreurPaiement(clientMovementError(err))
+    } finally {
+      setUsingCredit(false)
+    }
   }
 
   const rafraichirHistorique = async (clientId) => {
@@ -173,11 +175,12 @@ export default function ClientsView() {
   const ajouterClient = async () => {
     if (!nouveauNom.trim()) return
     setSavingClient(true)
-    const { data } = await supabase
+    const { data, error } = await supabase
         .from('clients')
-        .insert({ name: nouveauNom.trim(), phone: nouveauTel.trim() || null, debt: 0 })
+        .insert({ name: nouveauNom.trim(), phone: nouveauTel.trim() || null })
         .select()
         .single()
+    if (error) alert(error.message || 'The customer could not be created')
     if (data) setClients(cs => [...cs, data].sort((a, b) => a.name.localeCompare(b.name)))
     setNouveauNom('')
     setNouveauTel('')
@@ -239,10 +242,11 @@ export default function ClientsView() {
       <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
         <div style={s.headerRow}>
           <p style={s.titre}>Customers</p>
-          <button style={s.addBtn} onClick={() => setShowAddClient(true)}>+ Add</button>
+          {estGerant && <button style={s.addBtn} onClick={() => setShowAddClient(true)}>+ Add</button>}
         </div>
 
-        {/* KPIs */}
+        {/* KPIs (manager/admin) */}
+        {estGerant && (
         <div style={s.kpiRow}>
           <div style={s.kpiCard}>
             <div style={s.kpiLabel}>Outstanding debt</div>
@@ -255,6 +259,7 @@ export default function ClientsView() {
             <div style={s.kpiValue}>{clientsAvecDette}</div>
           </div>
         </div>
+        )}
 
         {/* Recherche */}
         <input
@@ -328,9 +333,11 @@ export default function ClientsView() {
                     ) : (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <div style={s.modalNom}>{selectedClient.name}</div>
-                          <button style={s.editPill} onClick={demarrerEditionNom}>
-                            ✏ Edit
-                          </button>
+                          {estGerant && (
+                              <button style={s.editPill} onClick={demarrerEditionNom}>
+                                ✏ Edit
+                              </button>
+                          )}
                         </div>
                     )}
                     <div style={s.modalTel}>{selectedClient.phone ?? 'No phone'}</div>
@@ -355,34 +362,61 @@ export default function ClientsView() {
                     </div>
                 )}
 
-                {/* Surplus de paiement : proposer de le convertir en avoir */}
-                {surplusPaiement > 0 && (
-                    <div style={s.surplusBanner}>
-                      <div style={s.surplusText}>
-                        Payment exceeded the debt by <strong>{formatPrice(surplusPaiement)} GH₵</strong>. Convert it to store credit?
-                      </div>
-                      <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
-                        <button
-                            style={s.surplusDiscardBtn}
-                            onClick={() => setSurplusPaiement(null)}
-                        >
-                          Discard
-                        </button>
-                        <button
-                            style={{ ...s.surplusConvertBtn, opacity: convertingSurplus ? 0.5 : 1 }}
-                            onClick={convertirSurplusEnAvoir}
-                            disabled={convertingSurplus}
-                        >
-                          {convertingSurplus ? 'Converting…' : `Convert (+${formatPrice(surplusPaiement)} GH₵)`}
-                        </button>
-                      </div>
+                {/* Résultat du dernier mouvement (avec la monnaie à rendre) */}
+                {resultat && (
+                    <div style={{ ...s.surplusBanner, background: '#F0FBF3', border: '1.5px solid #C8E6CF' }}>
+                      <div style={s.surplusText}>✓ {resultat.text}</div>
+                      {resultat.change > 0 && (
+                          <div style={{ ...s.surplusText, fontWeight: '600', marginTop: '6px' }}>
+                            Give back {formatPrice(resultat.change)} GH₵ change
+                          </div>
+                      )}
                     </div>
                 )}
 
-                {/* Enregistrer un paiement */}
-                {selectedClient.debt > 0 && (
+                {erreurPaiement && (
+                    <div style={{ ...s.surplusBanner, background: '#FFF0F0', border: '1.5px solid #F5C6C6' }}>
+                      <div style={{ ...s.surplusText, color: '#B3261E' }}>{erreurPaiement}</div>
+                    </div>
+                )}
+
+                {/* Trop-perçu : le choix est fait AVANT d'enregistrer (une seule opération) */}
+                {surplusChoice && (
+                    <div style={s.surplusBanner}>
+                      <div style={s.surplusText}>
+                        {formatPrice(surplusChoice.amount)} GH₵ received: the debt is settled and{' '}
+                        <strong>{formatPrice(surplusChoice.surplus)} GH₵</strong> is left over. What should happen to it?
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
+                        <button
+                            style={{ ...s.surplusDiscardBtn, opacity: savingPaiement ? 0.5 : 1 }}
+                            onClick={() => envoyerPaiement(surplusChoice.amount, 'change')}
+                            disabled={savingPaiement}
+                        >
+                          Give change back
+                        </button>
+                        <button
+                            style={{ ...s.surplusConvertBtn, opacity: savingPaiement ? 0.5 : 1 }}
+                            onClick={() => envoyerPaiement(surplusChoice.amount, 'credit')}
+                            disabled={savingPaiement}
+                        >
+                          {savingPaiement ? 'Saving…' : `Store credit (+${formatPrice(surplusChoice.surplus)} GH₵)`}
+                        </button>
+                      </div>
+                      <button
+                          style={{ ...s.fullPayBtn, marginTop: '10px', border: 'none' }}
+                          onClick={() => setSurplusChoice(null)}
+                          disabled={savingPaiement}
+                      >
+                        Back
+                      </button>
+                    </div>
+                )}
+
+                {/* Enregistrer un paiement (ou un dépôt d'avoir si le client n'a pas de dette) */}
+                {!surplusChoice && (
                     <div style={s.paiementSection}>
-                      <div style={s.fieldLabel}>Record a payment</div>
+                      <div style={s.fieldLabel}>{selectedClient.debt > 0 ? 'Record a payment' : 'Add store credit (deposit)'}</div>
                       <div style={s.paiementRow}>
                         <input
                             style={s.paiementInput}
@@ -391,25 +425,27 @@ export default function ClientsView() {
                             inputMode="decimal"
                             placeholder="Amount (GH₵)"
                             value={montantRemboursement}
-                            onChange={e => setMontantRemboursement(e.target.value)}
+                            onChange={e => { setMontantRemboursement(e.target.value); setErreurPaiement(null) }}
                         />
                         <button
                             style={{ ...s.paiementBtn, opacity: (!montantRemboursement || savingPaiement) ? 0.5 : 1 }}
                             onClick={enregistrerPaiement}
                             disabled={!montantRemboursement || savingPaiement}
                         >
-                          {savingPaiement ? '…' : 'Pay'}
+                          {savingPaiement ? '…' : selectedClient.debt > 0 ? 'Pay' : 'Add'}
                         </button>
                       </div>
-                      <button
-                          style={s.fullPayBtn}
-                          onClick={() => setMontantRemboursement(String(selectedClient.debt))}
-                      >
-                        Pay full amount ({selectedClient.debt.toLocaleString()} GH₵)
-                      </button>
+                      {selectedClient.debt > 0 && (
+                          <button
+                              style={s.fullPayBtn}
+                              onClick={() => setMontantRemboursement(String(selectedClient.debt))}
+                          >
+                            Pay full amount ({selectedClient.debt.toLocaleString()} GH₵)
+                          </button>
+                      )}
 
                       {/* Utiliser l'avoir sur la dette */}
-                      {selectedClient.credit > 0 && (
+                      {selectedClient.debt > 0 && selectedClient.credit > 0 && (
                           <button
                               style={{ ...s.useCreditBtn, opacity: usingCredit ? 0.5 : 1 }}
                               onClick={utiliserAvoir}
@@ -424,11 +460,11 @@ export default function ClientsView() {
                 )}
 
                 {/* Historique achats */}
-                <div style={s.fieldLabel}>Purchase history</div>
+                <div style={s.fieldLabel}>{estGerant ? 'Purchase history' : 'Your transactions with this customer'}</div>
                 {loadingHistorique ? (
                     <div style={s.loading}>Loading…</div>
                 ) : historique.length === 0 ? (
-                    <div style={s.emptySmall}>No purchases yet</div>
+                    <div style={s.emptySmall}>{estGerant ? 'No purchases yet' : 'No transactions by you yet'}</div>
                 ) : (
                     <>
                       <div style={s.historiqueList}>
@@ -500,7 +536,7 @@ export default function ClientsView() {
                 )}
 
                 {/* ── Zone suppression ── */}
-                {!loadingHistorique && !aAchats && (
+                {estGerant && !loadingHistorique && !aAchats && (
                     <div style={{ marginTop: '24px', borderTop: '1px solid #F0F0F0', paddingTop: '20px' }}>
                       {!confirmDelete ? (
                           <button style={s.deleteBtn} onClick={() => setConfirmDelete(true)}>
