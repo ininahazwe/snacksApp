@@ -8,7 +8,22 @@ export default function ClientsView() {
   // Manager/admin : gestion complète des clients. Cashier (phase 4) : encaisse
   // (paiement de dette, dépôt d'avoir, utilisation de l'avoir) sans créer,
   // renommer ni supprimer de client ; il ne voit que ses propres opérations.
-  const { estGerant } = useAuth()
+  const { estGerant, user } = useAuth()
+
+  // Qui a enregistré chaque transaction (sales.user_id). Les règles d'accès
+  // laissent un manager/admin lire tous les profils ; un cashier ne lit que le
+  // sien, ce qui suffit : il ne voit que ses propres transactions.
+  const [usersById, setUsersById] = useState({})
+  const fetchUsers = async () => {
+    const { data } = await supabase.from('profiles').select('id, display_name, email')
+    const map = {}
+    ;(data ?? []).forEach(u => { map[u.id] = u.display_name || (u.email ? u.email.split('@')[0] : null) })
+    setUsersById(map)
+  }
+  const auteur = (uid) => {
+    if (user && uid === user.id) return 'you'
+    return usersById[uid] ?? 'unknown user'
+  }
   const [clients, setClients] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedClient, setSelectedClient] = useState(null)
@@ -34,7 +49,7 @@ export default function ClientsView() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
-  useEffect(() => { fetchClients() }, [])
+  useEffect(() => { fetchClients(); fetchUsers() }, [])
 
   const fetchClients = async () => {
     const { data } = await supabase
@@ -496,7 +511,7 @@ export default function ClientsView() {
                                 <div style={s.histEmoji}>{emoji}</div>
                                 <div style={{ flex: 1 }}>
                                   <div style={{ ...s.histNom, textDecoration: isCancelled ? 'line-through' : 'none' }}>{label}</div>
-                                  <div style={s.histDate}>{formatDate(v.created_at)}{v.qty > 0 ? ` · ×${v.qty}` : ''}</div>
+                                  <div style={s.histDate}>{formatDate(v.created_at)}{v.qty > 0 ? ` · ×${v.qty}` : ''} · {v.user_id ? `by ${auteur(v.user_id)}` : 'recorded by: unknown (history)'}</div>
                                   {v.original_amount != null && (
                                       <div style={{ fontSize: '10px', color: '#C45000', marginTop: '1px' }}>
                                         🏷️ Discounted{v.discount_reason ? ` — ${v.discount_reason}` : ''}
